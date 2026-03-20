@@ -1,25 +1,21 @@
 import Foundation
-import UIKit
 
-@objc public class WfmCameraPlugin: NSObject {
+// 必须有 @objc 和 NSObject
+@objc(WfmCameraPlugin)
+public class WfmCameraPlugin: NSObject {
     
+    // 必须添加 @objc 让 OC 能调用
     @objc public override init() {
         super.init()
-        print("WfmCameraPlugin 初始化成功")
+        NSLog("✅ WfmCameraPlugin init")
     }
     
-    @objc public func test(_ callback: Any?) {
-        print("test 方法被调用")
-        
-        if let cb = callback as? ([String: Any]) -> Void {
-            cb(["success": true, "msg": "插件工作正常"])
-        }
-    }
-    
-    @objc public func checkCameraPermission(_ callback: Any?) {
-        // 简单的测试方法
-        if let cb = callback as? ([String: Any]) -> Void {
-            cb(["success": true, "status": "authorized"])
-        }
+    // 方法必须添加 @objc
+    @objc public func test(_ callback: @escaping ([String: Any]) -> Void) {
+        NSLog("✅ test called")
+        callback([
+            "success": true,
+            "msg": "工作正常"
+        ])
     }
 }
