@@ -17,15 +17,21 @@ jobs:
     
     - name: Build Framework
       run: ./build.sh
+      continue-on-error: false  # 出错就停止
+    
+    - name: Check build output
+      run: |
+        ls -la build/
+        if [ -f "build/WfmCameraPlugin.framework.zip" ]; then
+          echo "✅ Framework 生成成功"
+        else
+          echo "❌ Framework 生成失败"
+          exit 1
+        fi
         
     - name: Upload Framework
       uses: actions/upload-artifact@v4
       with:
-        name: WfmCameraPlugin.framework
-        path: build/WfmCameraPlugin.framework/
-        
-    - name: Upload ZIP
-      uses: actions/upload-artifact@v4
-      with:
         name: WfmCameraPlugin.framework.zip
         path: build/WfmCameraPlugin.framework.zip
+        if-no-files-found: error  # 没找到文件就报错
