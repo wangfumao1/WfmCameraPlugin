@@ -1,0 +1,31 @@
+name: Build WfmCameraPlugin
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Make script executable
+      run: chmod +x ./build.sh
+    
+    - name: Build Framework
+      run: ./build.sh
+        
+    - name: Upload Framework
+      uses: actions/upload-artifact@v4
+      with:
+        name: WfmCameraPlugin.framework
+        path: build/WfmCameraPlugin.framework/
+        
+    - name: Upload ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: WfmCameraPlugin.framework.zip
+        path: build/WfmCameraPlugin.framework.zip
