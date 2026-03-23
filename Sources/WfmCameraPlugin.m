@@ -34,7 +34,6 @@
 
 @implementation WfmCameraPlugin
 
-// 暴露方法
 UNI_EXPORT_METHOD(@selector(test:callback:))
 UNI_EXPORT_METHOD(@selector(openDualCamera:callback:))
 UNI_EXPORT_METHOD(@selector(closeDualCamera:callback:))
@@ -49,7 +48,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return self;
 }
 
-// 添加日志到数组
 - (void)addLog:(NSString *)message {
     if (!self.logs) {
         self.logs = [NSMutableArray array];
@@ -58,7 +56,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     NSLog(@"[WfmCameraPlugin] %@", message);
 }
 
-// 发送最终结果
 - (void)sendResult:(BOOL)success message:(NSString *)message callback:(UniModuleKeepAliveCallback)callback {
     if (callback) {
         NSMutableDictionary *result = [NSMutableDictionary dictionary];
@@ -77,7 +74,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.currentCallback = nil;
 }
 
-// 发送拍照结果
 - (void)sendPhotoResult:(NSString *)backPath frontPath:(NSString *)frontPath {
     if (self.currentCallback) {
         NSMutableDictionary *result = [NSMutableDictionary dictionary];
@@ -98,7 +94,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self.logs removeAllObjects];
 }
 
-// 保存图片到相册
 - (void)saveImageToPhotoLibrary:(UIImage *)image completion:(void(^)(NSString *path, NSError *error))completion {
     PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
     
@@ -148,7 +143,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     }];
 }
 
-// log 方法
 - (void)log:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     NSString *message = options[@"message"] ?: @"";
     [self addLog:message];
@@ -157,18 +151,16 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     }
 }
 
-// test 方法
 - (void)test:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     [self.logs removeAllObjects];
     [self addLog:@"========== test 方法开始 =========="];
     [self addLog:@"测试第一条日志"];
     [self addLog:@"测试第二条日志"];
-    [self addLog:@"测试第三条日志"];  // ✅ 修复：添加 [self
+    [self addLog:@"测试第三条日志"];
     [self addLog:@"========== test 方法结束 =========="];
     [self sendResult:YES message:@"插件工作正常！" callback:callback];
 }
 
-// 打开双摄
 - (void)openDualCamera:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     [self.logs removeAllObjects];
     self.currentCallback = callback;
@@ -218,7 +210,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     }
 }
 
-// 设置双摄预览（简化版，包含完整逻辑）
 - (void)setupDualCamera API_AVAILABLE(ios(13.0)) {
     [self addLog:@"开始设置双摄..."];
     
@@ -309,13 +300,14 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 创建后置预览视图
+            // 创建后置预览视图 - 全屏填充
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
             
             self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
-            self.backImageView.contentMode = UIViewContentModeScaleAspectFit;
+            // 使用 ScaleAspectFill 让画面填满全屏（会裁剪边缘，但更符合全屏需求）
+            self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor blackColor];
             self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             [self.backPreviewView addSubview:self.backImageView];
@@ -375,7 +367,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
                 [self.multiCamSession startRunning];
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [self addLog:@"✅ 双摄预览已开启，等待拍照"];
+                    [self addLog:@"✅ 双摄预览已开启，点击拍照按钮拍摄"];
                 });
             });
             
@@ -521,7 +513,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     dispatch_group_t group = dispatch_group_create();
     
-    // 保存后置照片
     if (self.backImage) {
         dispatch_group_enter(group);
         [self saveImageToPhotoLibrary:self.backImage completion:^(NSString *path, NSError *error) {
@@ -531,7 +522,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         }];
     }
     
-    // 保存前置照片
     if (self.frontImage) {
         dispatch_group_enter(group);
         [self saveImageToPhotoLibrary:self.frontImage completion:^(NSString *path, NSError *error) {
@@ -543,8 +533,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         [self addLog:@"照片保存完成，关闭双摄"];
+        
+        // 立即关闭双摄，释放资源
         [self closeDualCameraAndCleanup];
         
+        // 返回照片路径给前端
         if (backError || frontError) {
             [self sendResult:NO message:@"部分照片保存失败" callback:self.currentCallback];
         } else {
