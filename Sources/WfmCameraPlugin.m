@@ -30,6 +30,10 @@
 @property (nonatomic, assign) BOOL waitingForFrontPhoto;
 @property (nonatomic, assign) BOOL isTakingPhoto;
 
+// 摄像头格式相关方法
+- (AVCaptureDeviceFormat *)bestFormatForDevice:(AVCaptureDevice *)device;
+- (BOOL)configureBestFormatForDevice:(AVCaptureDevice *)device;
+
 @end
 
 @implementation WfmCameraPlugin
