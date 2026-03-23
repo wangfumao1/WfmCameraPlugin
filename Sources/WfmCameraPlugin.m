@@ -263,12 +263,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         frontLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
         [self.frontPreviewView.layer addSublayer:frontLayer];
         
-        // 设置前置摄像头镜像
-        for (AVCaptureConnection *connection in frontLayer.connections) {
-            if (connection.isVideoMirroringSupported) {
-                connection.videoMirrored = YES;
-                [self logMessage:@"前置镜像已设置" callback:callback];
-            }
+        // 设置前置摄像头镜像（修复：使用 connection 而不是 connections）
+        AVCaptureConnection *connection = frontLayer.connection;
+        if (connection && connection.isVideoMirroringSupported) {
+            connection.videoMirrored = YES;
+            [self logMessage:@"前置镜像已设置" callback:callback];
         }
         
         [self logMessage:@"✅ 双摄预览已开启！后置全屏，前置右上角小窗" callback:callback];
@@ -279,9 +278,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     });
 }
 
-// 获取当前视图控制器
+// 获取当前视图控制器（修复：使用 iOS 13+ 兼容方法）
 - (UIViewController *)getTopViewController {
     UIViewController *topVC = nil;
+    
     // iOS 13+ 使用 connectedScenes
     if (@available(iOS 13.0, *)) {
         for (UIWindowScene *windowScene in [UIApplication sharedApplication].connectedScenes) {
@@ -295,9 +295,14 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             }
         }
     } else {
+        // iOS 13 以下使用 keyWindow（虽然已废弃，但低版本兼容）
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+#pragma clang diagnostic pop
     }
     
+    // 获取最顶层的 ViewController
     while (topVC.presentedViewController) {
         topVC = topVC.presentedViewController;
     }
