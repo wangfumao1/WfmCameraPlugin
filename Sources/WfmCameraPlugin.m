@@ -2,13 +2,19 @@
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
 
-@interface WfmCameraPlugin ()
+@interface WfmCameraPlugin () <AVCaptureVideoDataOutputSampleBufferDelegate>
 
 @property (nonatomic, strong) AVCaptureMultiCamSession *multiCamSession;
 @property (nonatomic, strong) AVCaptureDeviceInput *backInput;
 @property (nonatomic, strong) AVCaptureDeviceInput *frontInput;
+@property (nonatomic, strong) AVCaptureVideoDataOutput *backOutput;
+@property (nonatomic, strong) AVCaptureVideoDataOutput *frontOutput;
 @property (nonatomic, strong) UIView *backPreviewView;
 @property (nonatomic, strong) UIView *frontPreviewView;
+@property (nonatomic, strong) UIImageView *backImageView;
+@property (nonatomic, strong) UIImageView *frontImageView;
+@property (nonatomic, strong) dispatch_queue_t videoQueue;
+@property (nonatomic, assign) CGColorSpaceRef colorSpace;
 
 @end
 
@@ -19,6 +25,15 @@ UNI_EXPORT_METHOD(@selector(test:callback:))
 UNI_EXPORT_METHOD(@selector(openDualCamera:callback:))
 UNI_EXPORT_METHOD(@selector(closeDualCamera:callback:))
 UNI_EXPORT_METHOD(@selector(log:callback:))
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        // 创建视频处理队列
+        _videoQueue = dispatch_queue_create("com.wfm.camera.queue", DISPATCH_QUEUE_SERIAL);
+    }
+    return self;
+}
 
 // 日志辅助方法
 - (void)log:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
@@ -116,6 +131,14 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.multiCamSession stopRunning];
             [self logMessage:@"会话已停止" callback:callback];
             
+            // 移除输出代理
+            if (self.backOutput) {
+                [self.backOutput setSampleBufferDelegate:nil queue:NULL];
+            }
+            if (self.frontOutput) {
+                [self.frontOutput setSampleBufferDelegate:nil queue:NULL];
+            }
+            
             if (self.backPreviewView) {
                 [self.backPreviewView removeFromSuperview];
                 self.backPreviewView = nil;
@@ -130,6 +153,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.multiCamSession = nil;
             self.backInput = nil;
             self.frontInput = nil;
+            self.backOutput = nil;
+            self.frontOutput = nil;
+            self.backImageView = nil;
+            self.frontImageView = nil;
             
             [self logMessage:@"双摄已关闭" callback:callback];
             if (callback) {
@@ -153,7 +180,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             // 1. 创建多摄会话
             [self logMessage:@"步骤1: 创建多摄会话..." callback:callback];
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
-            self.multiCamSession.sessionPreset = AVCaptureSessionPresetPhoto;
+            self.multiCamSession.sessionPreset = AVCaptureSessionPresetHigh;
             [self logMessage:@"步骤1: 多摄会话创建成功" callback:callback];
             
             // 2. 获取后置摄像头
@@ -217,48 +244,74 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 6. 启动会话
-            [self logMessage:@"步骤6: 启动会话..." callback:callback];
+            // 6. 添加后置视频输出
+            [self logMessage:@"步骤6: 添加后置视频输出..." callback:callback];
+            self.backOutput = [[AVCaptureVideoDataOutput alloc] init];
+            self.backOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
+            [self.backOutput setSampleBufferDelegate:self queue:self.videoQueue];
             
-            // 在后台线程启动会话，避免阻塞主线程
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-                [self.multiCamSession startRunning];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self logMessage:@"步骤6: 会话已启动" callback:callback];
-                });
-            });
+            if ([self.multiCamSession canAddOutput:self.backOutput]) {
+                [self.multiCamSession addOutputWithNoConnections:self.backOutput];
+                
+                // 创建后置输出连接
+                AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
+                if ([self.multiCamSession canAddConnection:backConnection]) {
+                    [self.multiCamSession addConnection:backConnection];
+                    [self logMessage:@"步骤6: 后置视频输出添加成功" callback:callback];
+                } else {
+                    [self logMessage:@"步骤6: 无法添加后置输出连接" callback:callback];
+                }
+            } else {
+                [self logMessage:@"步骤6: 无法添加后置视频输出" callback:callback];
+            }
             
-            // 7. 获取当前视图
-            [self logMessage:@"步骤7: 获取当前视图..." callback:callback];
+            // 7. 添加前置视频输出
+            [self logMessage:@"步骤7: 添加前置视频输出..." callback:callback];
+            self.frontOutput = [[AVCaptureVideoDataOutput alloc] init];
+            self.frontOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
+            [self.frontOutput setSampleBufferDelegate:self queue:self.videoQueue];
+            
+            if ([self.multiCamSession canAddOutput:self.frontOutput]) {
+                [self.multiCamSession addOutputWithNoConnections:self.frontOutput];
+                
+                // 创建前置输出连接
+                AVCaptureConnection *frontConnection = [AVCaptureConnection connectionWithInputPorts:self.frontInput.ports output:self.frontOutput];
+                if (frontConnection.isVideoMirroringSupported) {
+                    frontConnection.videoMirrored = YES;
+                }
+                if ([self.multiCamSession canAddConnection:frontConnection]) {
+                    [self.multiCamSession addConnection:frontConnection];
+                    [self logMessage:@"步骤7: 前置视频输出添加成功" callback:callback];
+                } else {
+                    [self logMessage:@"步骤7: 无法添加前置输出连接" callback:callback];
+                }
+            } else {
+                [self logMessage:@"步骤7: 无法添加前置视频输出" callback:callback];
+            }
+            
+            // 8. 获取当前视图并创建预览
+            [self logMessage:@"步骤8: 获取当前视图..." callback:callback];
             UIViewController *topVC = [self getTopViewController];
             if (!topVC) {
-                [self logMessage:@"步骤7: 无法获取当前视图" callback:callback];
+                [self logMessage:@"步骤8: 无法获取当前视图" callback:callback];
                 if (callback) callback(@{@"success": @NO, @"msg": @"无法获取当前视图"}, NO);
                 return;
             }
-            [self logMessage:[NSString stringWithFormat:@"步骤7: 当前视图: %@", NSStringFromClass([topVC class])] callback:callback];
+            [self logMessage:[NSString stringWithFormat:@"步骤8: 当前视图: %@", NSStringFromClass([topVC class])] callback:callback];
             
-            // 8. 添加后置预览
-            [self logMessage:@"步骤8: 添加后置预览..." callback:callback];
+            // 9. 创建后置预览视图（全屏）
+            [self logMessage:@"步骤9: 创建后置预览..." callback:callback];
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
             
-            AVCaptureVideoPreviewLayer *backLayer = [[AVCaptureVideoPreviewLayer alloc] initWithSession:self.multiCamSession];
-            backLayer.frame = self.backPreviewView.bounds;
-            backLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+            self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
+            self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
+            [self.backPreviewView addSubview:self.backImageView];
+            [self logMessage:@"步骤10: 后置预览已创建" callback:callback];
             
-            // 设置后置摄像头连接
-            if (backLayer.connection) {
-                backLayer.connection.automaticallyAdjustsVideoMirroring = NO;
-                backLayer.connection.videoMirrored = NO;
-            }
-            
-            [self.backPreviewView.layer addSublayer:backLayer];
-            [self logMessage:@"步骤8: 后置预览已添加" callback:callback];
-            
-            // 9. 添加前置小窗
-            [self logMessage:@"步骤9: 添加前置小窗..." callback:callback];
+            // 11. 创建前置预览视图（小窗）
+            [self logMessage:@"步骤11: 创建前置预览..." callback:callback];
             CGFloat smallWidth = 120;
             CGFloat smallHeight = 160;
             CGFloat margin = 16;
@@ -277,28 +330,23 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontPreviewView.layer.borderColor = [UIColor whiteColor].CGColor;
             [topVC.view addSubview:self.frontPreviewView];
             
-            AVCaptureVideoPreviewLayer *frontLayer = [[AVCaptureVideoPreviewLayer alloc] initWithSession:self.multiCamSession];
-            frontLayer.frame = self.frontPreviewView.bounds;
-            frontLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+            self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
+            self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
+            [self.frontPreviewView addSubview:self.frontImageView];
+            [self logMessage:@"步骤10: 前置预览已创建" callback:callback];
             
-            // 设置前置摄像头连接并启用镜像
-            if (frontLayer.connection) {
-                frontLayer.connection.automaticallyAdjustsVideoMirroring = NO;
-                if (frontLayer.connection.isVideoMirroringSupported) {
-                    frontLayer.connection.videoMirrored = YES;
-                    [self logMessage:@"步骤9: 前置镜像已设置" callback:callback];
-                } else {
-                    [self logMessage:@"步骤9: 设备不支持镜像" callback:callback];
-                }
-            }
-            
-            [self.frontPreviewView.layer addSublayer:frontLayer];
-            [self logMessage:@"步骤9: 前置小窗已添加" callback:callback];
-            
-            [self logMessage:@"✅ 双摄预览已开启！" callback:callback];
-            if (callback) {
-                callback(@{@"success": @YES, @"msg": @"双摄预览已开启"}, NO);
-            }
+            // 11. 启动会话
+            [self logMessage:@"步骤11: 启动会话..." callback:callback];
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{ 
+                [self.multiCamSession startRunning];
+                dispatch_async(dispatch_get_main_queue(), ^{ 
+                    [self logMessage:@"步骤11: 会话已启动" callback:callback];
+                    [self logMessage:@"✅ 双摄预览已开启！" callback:callback];
+                    if (callback) {
+                        callback(@{@"success": @YES, @"msg": @"双摄预览已开启"}, NO);
+                    }
+                });
+            });
             
         } @catch (NSException *exception) {
             [self logMessage:[NSString stringWithFormat:@"设置双摄时崩溃: %@", exception.reason] callback:callback];
@@ -307,6 +355,75 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             }
         }
     });
+}
+
+#pragma mark - AVCaptureVideoDataOutputSampleBufferDelegate
+
+- (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
+    if (!sampleBuffer) return;
+    
+    // 判断是哪个摄像头的数据
+    UIImageView *targetImageView = nil;
+    if (output == self.backOutput) {
+        targetImageView = self.backImageView;
+    } else if (output == self.frontOutput) {
+        targetImageView = self.frontImageView;
+    }
+    
+    if (!targetImageView) return;
+    
+    // 将 sample buffer 转换为 UIImage
+    UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
+    
+    if (image) {
+        dispatch_async(dispatch_get_main_queue(), ^{ 
+            // 确保视图仍然存在
+            if (targetImageView.superview) {
+                targetImageView.image = image;
+            }
+        });
+    }
+}
+
+- (void)captureOutput:(AVCaptureOutput *)output didDropSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
+    // 处理丢帧情况
+}
+
+// 将 CMSampleBufferRef 转换为 UIImage
+- (UIImage *)imageFromSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (!imageBuffer) return nil;
+    
+    CVPixelBufferLockBaseAddress(imageBuffer, 0);
+    
+    void *baseAddress = CVPixelBufferGetBaseAddress(imageBuffer);
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
+    size_t width = CVPixelBufferGetWidth(imageBuffer);
+    size_t height = CVPixelBufferGetHeight(imageBuffer);
+    
+    // 重用颜色空间
+    if (!self.colorSpace) {
+        self.colorSpace = CGColorSpaceCreateDeviceRGB();
+    }
+    
+    // 创建上下文
+    CGContextRef context = CGBitmapContextCreate(baseAddress, width, height, 8, bytesPerRow, self.colorSpace, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
+    
+    CGImageRef cgImage = CGBitmapContextCreateImage(context);
+    UIImage *image = [UIImage imageWithCGImage:cgImage];
+    
+    CGImageRelease(cgImage);
+    CGContextRelease(context);
+    
+    CVPixelBufferUnlockBaseAddress(imageBuffer, 0);
+    
+    return image;
+}
+
+- (void)dealloc {
+    if (self.colorSpace) {
+        CGColorSpaceRelease(self.colorSpace);
+    }
 }
 
 // 获取当前视图控制器
