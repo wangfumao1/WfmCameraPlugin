@@ -82,12 +82,37 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
 // test 方法
 - (void)test:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
-    [self logMessage:@"test 方法开始" callback:callback];
-    [self logMessage:@"测试第一条日志" callback:callback];
-    [self logMessage:@"测试第二条日志" callback:callback];
-    [self logMessage:@"测试第三条日志" callback:callback];
-    [self logMessage:@"test 方法结束" callback:callback];
-    [self sendResult:YES message:@"插件工作正常！" callback:callback];
+    // 初始化日志数组（如果为空）
+    if (!self.logs) {
+        self.logs = [NSMutableArray array];
+    }
+    
+    // 清空旧日志
+    [self.logs removeAllObjects];
+    
+    // 添加日志
+    [self.logs addObject:@"test 方法开始"];
+    [self.logs addObject:@"测试第一条日志"];
+    [self.logs addObject:@"测试第二条日志"];
+    [self.logs addObject:@"测试第三条日志"];
+    [self.logs addObject:@"test 方法结束"];
+    
+    // 打印到控制台（用于 Xcode 调试）
+    for (NSString *log in self.logs) {
+        NSLog(@"[WfmCameraPlugin] %@", log);
+    }
+    
+    // 发送结果
+    if (callback) {
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        result[@"success"] = @YES;
+        result[@"msg"] = @"插件工作正常！";
+        result[@"logs"] = [self.logs copy];  // 传递日志副本
+        callback(result, NO);
+    }
+    
+    // 清空日志
+    [self.logs removeAllObjects];
 }
 
 // 打开双摄
