@@ -1,60 +1,101 @@
 #!/bin/bash
 set -e
+set -x  # 显示执行过程，方便调试
 
 FRAMEWORK_NAME="WfmCameraPlugin"
 OUTPUT_DIR="build"
 
-echo "🔨 编译..."
+echo "🔨 开始编译..."
 
-# 清理
+# 清理旧文件
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Headers"
 
-# 获取 SDK
+# 解压 SDK 头文件
+echo "📦 解压 SDK 头文件..."
+if [ -f "inc.zip" ]; then
+    unzip -o inc.zip
+    echo "✅ inc.zip 解压完成"
+else
+    echo "❌ 找不到 inc.zip，请确保已上传"
+    exit 1
+fi
+
+# 检查头文件是否存在
+if [ ! -f "inc/DCUniModule.h" ]; then
+    echo "❌ 找不到 inc/DCUniModule.h"
+    ls -la inc/
+    exit 1
+fi
+echo "✅ 找到 DCUniModule.h"
+
+# 获取 iOS SDK 路径
 IPHONE_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+echo "iOS SDK: $IPHONE_SDK"
 
 # 编译
+echo "🔨 编译 Objective-C 代码..."
 clang -arch arm64 \
     -isysroot "$IPHONE_SDK" \
-    -framework Foundation \
+    -I ./inc \
     -fobjc-arc \
-    -I Sources \
     -c Sources/WfmCameraPlugin.m \
     -o "$OUTPUT_DIR/WfmCameraPlugin.o"
 
 # 创建静态库
+echo "📚 创建静态库..."
 ar rcs "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUTPUT_DIR/WfmCameraPlugin.o"
 
 # 复制头文件
 cp Sources/WfmCameraPlugin.h "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Headers/"
 
 # 创建 Info.plist
+echo "📝 创建 Info.plist..."
 cat > "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
     <key>CFBundleExecutable</key>
     <string>$FRAMEWORK_NAME</string>
     <key>CFBundleIdentifier</key>
-    <string>com.test.$FRAMEWORK_NAME</string>
+    <string>com.wfm.$FRAMEWORK_NAME</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
     <key>CFBundleName</key>
     <string>$FRAMEWORK_NAME</string>
     <key>CFBundlePackageType</key>
     <string>FMWK</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.0.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>MinimumOSVersion</key>
+    <string>13.0</string>
 </dict>
 </plist>
 EOF
 
+# 转换为二进制格式
 plutil -convert binary1 "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Info.plist"
+
+# 创建 module.modulemap（如果需要）
+mkdir -p "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Modules"
+cat > "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Modules/module.modulemap" <<EOF
+framework module $FRAMEWORK_NAME {
+    header "$FRAMEWORK_NAME-Swift.h"
+    export *
+}
+EOF
 
 # 打包
 cd "$OUTPUT_DIR"
 zip -r "$FRAMEWORK_NAME.framework.zip" "$FRAMEWORK_NAME.framework/"
 cd ..
 
-echo "✅ 完成！"
+echo "✅ 编译完成！"
+echo "最终文件大小："
+ls -lh "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
+ls -lh "$OUTPUT_DIR/$FRAMEWORK_NAME.framework.zip"
