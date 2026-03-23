@@ -1,6 +1,7 @@
 #import "WfmCameraPlugin.h"
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
+#import <Photos/Photos.h>
 
 @interface WfmCameraPlugin () <AVCaptureVideoDataOutputSampleBufferDelegate>
 
@@ -22,6 +23,12 @@
 @property (nonatomic, strong) UIButton *closeButton;
 @property (nonatomic, strong) UIButton *captureButton;
 
+// 拍照相关
+@property (nonatomic, strong) UIImage *backImage;
+@property (nonatomic, strong) UIImage *frontImage;
+@property (nonatomic, assign) BOOL waitingForBackPhoto;
+@property (nonatomic, assign) BOOL waitingForFrontPhoto;
+
 @end
 
 @implementation WfmCameraPlugin
@@ -30,6 +37,7 @@
 UNI_EXPORT_METHOD(@selector(test:callback:))
 UNI_EXPORT_METHOD(@selector(openDualCamera:callback:))
 UNI_EXPORT_METHOD(@selector(closeDualCamera:callback:))
+UNI_EXPORT_METHOD(@selector(takePhoto:callback:))
 UNI_EXPORT_METHOD(@selector(log:callback:))
 
 - (instancetype)init {
@@ -69,6 +77,68 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.currentCallback = nil;
 }
 
+// 保存图片到相册
+- (void)saveImageToPhotoLibrary:(UIImage *)image completion:(void(^)(NSString *path, NSError *error))completion {
+    // 检查相册权限
+    PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
+    
+    if (status == PHAuthorizationStatusNotDetermined) {
+        [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus newStatus) {
+            if (newStatus == PHAuthorizationStatusAuthorized) {
+                [self performSaveImage:image completion:completion];
+            } else {
+                if (completion) {
+                    completion(nil, [NSError errorWithDomain:@"WfmCameraPlugin" code:4001 userInfo:@{NSLocalizedDescriptionKey: @"相册权限未授权"}]);
+                }
+            }
+        }];
+    } else if (status == PHAuthorizationStatusAuthorized) {
+        [self performSaveImage:image completion:completion];
+    } else {
+        if (completion) {
+            completion(nil, [NSError errorWithDomain:@"WfmCameraPlugin" code:4002 userInfo:@{NSLocalizedDescriptionKey: @"请先在设置中开启相册权限"}]);
+        }
+    }
+}
+
+- (void)performSaveImage:(UIImage *)image completion:(void(^)(NSString *path, NSError *error))completion {
+    __block NSString *localIdentifier = nil;
+    
+    [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
+        PHAssetChangeRequest *request = [PHAssetChangeRequest creationRequestForAssetFromImage:image];
+        localIdentifier = request.placeholderForCreatedAsset.localIdentifier;
+    } completionHandler:^(BOOL success, NSError *error) {
+        if (success && localIdentifier) {
+            // 获取图片路径
+            PHFetchResult *result = [PHAsset fetchAssetsWithLocalIdentifiers:@[localIdentifier] options:nil];
+            PHAsset *asset = result.firstObject;
+            if (asset) {
+                // 获取本地路径
+                NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+                NSString *documentsPath = paths.firstObject;
+                NSString *fileName = [NSString stringWithFormat:@"photo_%.0f.jpg", [[NSDate date] timeIntervalSince1970]];
+                NSString *filePath = [documentsPath stringByAppendingPathComponent:fileName];
+                
+                // 保存到本地文件
+                NSData *imageData = UIImageJPEGRepresentation(image, 0.9);
+                [imageData writeToFile:filePath atomically:YES];
+                
+                if (completion) {
+                    completion(filePath, nil);
+                }
+            } else {
+                if (completion) {
+                    completion(nil, [NSError errorWithDomain:@"WfmCameraPlugin" code:4003 userInfo:@{NSLocalizedDescriptionKey: @"获取图片路径失败"}]);
+                }
+            }
+        } else {
+            if (completion) {
+                completion(nil, error ?: [NSError errorWithDomain:@"WfmCameraPlugin" code:4004 userInfo:@{NSLocalizedDescriptionKey: @"保存图片失败"}]);
+            }
+        }
+    }];
+}
+
 // log 方法
 - (void)log:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     NSString *message = options[@"message"] ?: @"";
@@ -97,7 +167,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self addLog:@"========== 打开双摄 =========="];
     
     @try {
-        // 检查 iOS 版本
         if (@available(iOS 13.0, *)) {
             [self addLog:@"✅ iOS 13+ 检查通过"];
         } else {
@@ -106,7 +175,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             return;
         }
         
-        // 检查权限
         AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
         [self addLog:[NSString stringWithFormat:@"相机权限状态: %ld", (long)status]];
         
@@ -138,6 +206,17 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         [self addLog:[NSString stringWithFormat:@"❌ 异常: %@", exception.reason]];
         [self sendResult:NO message:exception.reason callback:callback];
     }
+}
+
+// 拍照
+- (void)takePhoto:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
+    [self addLog:@"========== 拍照 =========="];
+    
+    self.captureCallback = callback;
+    self.waitingForBackPhoto = YES;
+    self.waitingForFrontPhoto = YES;
+    self.backImage = nil;
+    self.frontImage = nil;
 }
 
 // 设置双摄预览
@@ -298,14 +377,16 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             }
             [self addLog:[NSString stringWithFormat:@"步骤8: ✅ 当前视图: %@", NSStringFromClass([topVC class])]];
             
-            // 步骤9: 创建后置预览视图（全屏）
+            // 步骤9: 创建后置预览视图（全屏）- 使用 ScaleAspectFit 解决镜头远近问题
             [self addLog:@"步骤9: 创建后置预览视图..."];
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
             
             self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
-            self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
+            // 使用 ScaleAspectFit 显示完整画面，解决镜头裁剪问题
+            self.backImageView.contentMode = UIViewContentModeScaleAspectFit;
+            self.backImageView.backgroundColor = [UIColor blackColor];
             // 后置摄像头：旋转90度（竖屏）
             self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             [self.backPreviewView addSubview:self.backImageView];
@@ -333,7 +414,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
-            // 前置摄像头：旋转90度 + 水平镜像（自拍效果）
+            // 前置摄像头：旋转90度 + 水平镜像
             self.frontImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
@@ -402,10 +483,9 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 // 拍照按钮点击事件
 - (void)captureButtonTapped {
     [self addLog:@"拍照按钮点击"];
-    // TODO: 实现拍照功能
-    if (self.currentCallback) {
-        self.currentCallback(@{@"success": @YES, @"msg": @"拍照功能开发中"}, NO);
-    }
+    [self takePhoto:@{} callback:^(NSDictionary *result, BOOL keepAlive) {
+        // 拍照完成后的回调会在 takePhoto 方法中处理
+    }];
 }
 
 // 关闭双摄
@@ -469,10 +549,14 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (!sampleBuffer) return;
     
     UIImageView *targetImageView = nil;
+    UIImage **targetImage = nil;
+    
     if (output == self.backOutput) {
         targetImageView = self.backImageView;
+        targetImage = &_backImage;
     } else if (output == self.frontOutput) {
         targetImageView = self.frontImageView;
+        targetImage = &_frontImage;
     }
     
     if (!targetImageView) return;
@@ -483,8 +567,115 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             if (targetImageView.superview) {
                 targetImageView.image = image;
             }
+            
+            // 如果正在等待拍照，保存图片
+            if (targetImage && (self.waitingForBackPhoto || self.waitingForFrontPhoto)) {
+                *targetImage = image;
+                
+                if (output == self.backOutput) {
+                    self.waitingForBackPhoto = NO;
+                    [self addLog:@"✅ 后置照片已捕获"];
+                } else if (output == self.frontOutput) {
+                    self.waitingForFrontPhoto = NO;
+                    [self addLog:@"✅ 前置照片已捕获"];
+                }
+                
+                // 检查是否两张照片都拍好了
+                if (!self.waitingForBackPhoto && !self.waitingForFrontPhoto && self.captureCallback) {
+                    [self saveBothPhotos];
+                }
+            }
         });
     }
+}
+
+- (void)saveBothPhotos {
+    [self addLog:@"开始保存前后照片..."];
+    
+    // 检查相册权限
+    PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
+    
+    if (status == PHAuthorizationStatusNotDetermined) {
+        [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus newStatus) {
+            if (newStatus == PHAuthorizationStatusAuthorized) {
+                [self performSaveBothPhotos];
+            } else {
+                [self addLog:@"❌ 相册权限未授权"];
+                if (self.captureCallback) {
+                    self.captureCallback(@{@"success": @NO, @"msg": @"需要相册权限"}, NO);
+                    self.captureCallback = nil;
+                }
+            }
+        }];
+    } else if (status == PHAuthorizationStatusAuthorized) {
+        [self performSaveBothPhotos];
+    } else {
+        [self addLog:@"❌ 相册权限未授权"];
+        if (self.captureCallback) {
+            self.captureCallback(@{@"success": @NO, @"msg": @"请先在设置中开启相册权限"}, NO);
+            self.captureCallback = nil;
+        }
+    }
+}
+
+- (void)performSaveBothPhotos {
+    __block NSString *backPath = nil;
+    __block NSString *frontPath = nil;
+    __block NSError *backError = nil;
+    __block NSError *frontError = nil;
+    
+    dispatch_group_t group = dispatch_group_create();
+    
+    // 保存后置照片
+    if (self.backImage) {
+        dispatch_group_enter(group);
+        [self saveImageToPhotoLibrary:self.backImage completion:^(NSString *path, NSError *error) {
+            backPath = path;
+            backError = error;
+            dispatch_group_leave(group);
+        }];
+    }
+    
+    // 保存前置照片
+    if (self.frontImage) {
+        dispatch_group_enter(group);
+        [self saveImageToPhotoLibrary:self.frontImage completion:^(NSString *path, NSError *error) {
+            frontPath = path;
+            frontError = error;
+            dispatch_group_leave(group);
+        }];
+    }
+    
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        
+        if (backError || frontError) {
+            result[@"success"] = @NO;
+            result[@"msg"] = @"部分照片保存失败";
+        } else {
+            result[@"success"] = @YES;
+            result[@"msg"] = @"拍照成功";
+        }
+        
+        if (backPath) {
+            result[@"backPath"] = backPath;
+        }
+        if (frontPath) {
+            result[@"frontPath"] = frontPath;
+        }
+        
+        [self addLog:[NSString stringWithFormat:@"后置照片路径: %@", backPath ?: @"保存失败"]];
+        [self addLog:[NSString stringWithFormat:@"前置照片路径: %@", frontPath ?: @"保存失败"]];
+        
+        if (self.captureCallback) {
+            self.captureCallback(result, NO);
+            self.captureCallback = nil;
+        }
+        
+        // 清空图片
+        self.backImage = nil;
+        self.frontImage = nil;
+    });
 }
 
 - (UIImage *)imageFromSampleBuffer:(CMSampleBufferRef)sampleBuffer {
