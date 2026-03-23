@@ -161,68 +161,13 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self sendResult:YES message:@"插件工作正常！" callback:callback];
 }
 
-#pragma mark - 获取摄像头当前分辨率
+#pragma mark - 获取摄像头当前分辨率（不修改，只读取）
 - (CGSize)getCameraResolution:(AVCaptureDevice *)device {
     if (!device || !device.activeFormat) {
-        return CGSizeMake(1280, 720); // 默认 16:9
+        return CGSizeMake(16, 9); // 默认 16:9
     }
     CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription);
     return CGSizeMake(dims.width, dims.height);
-}
-
-#pragma mark - 设置摄像头格式（统一前后分辨率）
-- (void)configureCameraDevice:(AVCaptureDevice *)device {
-    if (!device) return;
-    
-    NSError *error = nil;
-    if (![device lockForConfiguration:&error]) {
-        [self addLog:[NSString stringWithFormat:@"⚠️ 无法锁定摄像头配置: %@", error.localizedDescription]];
-        return;
-    }
-    
-    // 查找 1920x1080 格式（16:9 比例）
-    AVCaptureDeviceFormat *targetFormat = nil;
-    for (AVCaptureDeviceFormat *format in device.formats) {
-        CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-        if (dims.width == 1920 && dims.height == 1080) {
-            targetFormat = format;
-            break;
-        }
-    }
-    
-    if (!targetFormat) {
-        for (AVCaptureDeviceFormat *format in device.formats) {
-            CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-            if (dims.width == 1280 && dims.height == 720) {
-                targetFormat = format;
-                break;
-            }
-        }
-    }
-    
-    if (!targetFormat) {
-        for (AVCaptureDeviceFormat *format in device.formats) {
-            CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-            if (!targetFormat) {
-                targetFormat = format;
-            } else {
-                CMVideoDimensions currentDims = CMVideoFormatDescriptionGetDimensions(targetFormat.formatDescription);
-                if (dims.width > currentDims.width && dims.height > currentDims.height) {
-                    targetFormat = format;
-                }
-            }
-        }
-    }
-    
-    if (targetFormat) {
-        device.activeFormat = targetFormat;
-        device.activeVideoMinFrameDuration = CMTimeMake(1, 30);
-        device.activeVideoMaxFrameDuration = CMTimeMake(1, 30);
-        CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(targetFormat.formatDescription);
-        [self addLog:[NSString stringWithFormat:@"✅ 设置摄像头格式: %dx%d", dims.width, dims.height]];
-    }
-    
-    [device unlockForConfiguration];
 }
 
 - (void)openDualCamera:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
@@ -279,8 +224,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
+            // 创建多摄会话（不设置分辨率，使用系统默认）
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
             
+            // 获取后置摄像头
             AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
                                                                               mediaType:AVMediaTypeVideo
                                                                                position:AVCaptureDevicePositionBack];
@@ -290,6 +237,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
+            // 获取前置摄像头
             AVCaptureDevice *frontCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
                                                                                mediaType:AVMediaTypeVideo
                                                                                 position:AVCaptureDevicePositionFront];
@@ -299,15 +247,17 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 统一设置前后摄像头的分辨率
-            [self configureCameraDevice:backCamera];
-            [self configureCameraDevice:frontCamera];
+            // ✅ 获取摄像头默认分辨率（只读取，不修改）
+            CGSize backResolution = [self getCameraResolution:backCamera];
+            CGSize frontResolution = [self getCameraResolution:frontCamera];
+            [self addLog:[NSString stringWithFormat:@"后置默认分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
+            [self addLog:[NSString stringWithFormat:@"前置默认分辨率: %.0fx%.0f", frontResolution.width, frontResolution.height]];
             
-            // 获取后置摄像头的实际分辨率（前后已统一）
-            CGSize resolution = [self getCameraResolution:backCamera];
-            CGFloat aspectRatio = resolution.width / resolution.height;
-            [self addLog:[NSString stringWithFormat:@"摄像头分辨率: %.0fx%.0f, 比例: %.2f", resolution.width, resolution.height, aspectRatio]];
+            // 使用后置分辨率计算比例（前后分辨率通常一致）
+            CGFloat aspectRatio = backResolution.width / backResolution.height;
+            [self addLog:[NSString stringWithFormat:@"画面比例: %.2f (%.0f:%.0f)", aspectRatio, backResolution.width, backResolution.height]];
             
+            // 添加后置输入
             NSError *error = nil;
             self.backInput = [AVCaptureDeviceInput deviceInputWithDevice:backCamera error:&error];
             if (error || ![self.multiCamSession canAddInput:self.backInput]) {
@@ -318,6 +268,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.multiCamSession addInput:self.backInput];
             [self addLog:@"✅ 后置输入添加成功"];
             
+            // 添加前置输入
             self.frontInput = [AVCaptureDeviceInput deviceInputWithDevice:frontCamera error:&error];
             if (error || ![self.multiCamSession canAddInput:self.frontInput]) {
                 [self addLog:@"❌ 无法添加前置输入"];
@@ -327,6 +278,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.multiCamSession addInput:self.frontInput];
             [self addLog:@"✅ 前置输入添加成功"];
             
+            // 添加后置视频输出
             self.backOutput = [[AVCaptureVideoDataOutput alloc] init];
             self.backOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
             [self.backOutput setSampleBufferDelegate:self queue:self.videoQueue];
@@ -336,9 +288,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 if (self.backInput.ports.count > 0) {
                     AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
                     if (backConnection) {
-                        if (backConnection.isVideoStabilizationSupported) {
-                            backConnection.preferredVideoStabilizationMode = AVCaptureVideoStabilizationModeAuto;
-                        }
                         if ([self.multiCamSession canAddConnection:backConnection]) {
                             [self.multiCamSession addConnection:backConnection];
                             [self addLog:@"✅ 后置视频输出添加成功"];
@@ -347,6 +296,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 }
             }
             
+            // 添加前置视频输出
             self.frontOutput = [[AVCaptureVideoDataOutput alloc] init];
             self.frontOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
             [self.frontOutput setSampleBufferDelegate:self queue:self.videoQueue];
@@ -367,6 +317,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 }
             }
             
+            // 获取当前视图
             UIViewController *topVC = [self getTopViewController];
             if (!topVC) {
                 [self addLog:@"❌ 无法获取当前视图"];
@@ -382,15 +333,17 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor blackColor];
-            self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             [self.backPreviewView addSubview:self.backImageView];
             [self addLog:@"✅ 后置预览视图已创建"];
             
-            // 前置预览小窗 - 根据摄像头实际分辨率动态计算尺寸
-            CGFloat smallWidth = 120;
-            CGFloat smallHeight = smallWidth / aspectRatio;
+            // ✅ 前置预览小窗 - 根据摄像头比例动态计算尺寸，最大宽度120
+            CGFloat maxWidth = 120;
+            CGFloat smallWidth = maxWidth;
+            CGFloat smallHeight = smallWidth / aspectRatio;  // 按比例计算高度
             CGFloat margin = 16;
             CGFloat topOffset = 100;
+            
+            [self addLog:[NSString stringWithFormat:@"小窗尺寸: %.0f x %.0f (比例 %.2f)", smallWidth, smallHeight, aspectRatio]];
             
             self.frontPreviewView = [[UIView alloc] initWithFrame:CGRectMake(
                 topVC.view.bounds.size.width - smallWidth - margin,
@@ -404,13 +357,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontPreviewView.layer.borderWidth = 2;
             self.frontPreviewView.layer.borderColor = [UIColor whiteColor].CGColor;
             [topVC.view addSubview:self.frontPreviewView];
-            [self addLog:[NSString stringWithFormat:@"✅ 前置预览小窗已创建: %.0fx%.0f (比例 %.2f)", smallWidth, smallHeight, aspectRatio]];
             
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
-            self.frontImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
-            self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
+            [self addLog:@"✅ 前置预览小窗已创建"];
             
             // 返回按钮
             self.closeButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -438,6 +389,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.captureButton addTarget:self action:@selector(captureButtonTapped) forControlEvents:UIControlEventTouchUpInside];
             [topVC.view addSubview:self.captureButton];
             
+            // 启动会话
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
                 [self.multiCamSession startRunning];
                 dispatch_async(dispatch_get_main_queue(), ^{
