@@ -3,14 +3,13 @@
 #import <UIKit/UIKit.h>
 #import <Photos/Photos.h>
 
-@interface WfmCameraPlugin () <AVCaptureVideoDataOutputSampleBufferDelegate, AVCapturePhotoCaptureDelegate>
+@interface WfmCameraPlugin () <AVCaptureVideoDataOutputSampleBufferDelegate>
 
 @property (nonatomic, strong) AVCaptureMultiCamSession *multiCamSession;
 @property (nonatomic, strong) AVCaptureDeviceInput *backInput;
 @property (nonatomic, strong) AVCaptureDeviceInput *frontInput;
 @property (nonatomic, strong) AVCaptureVideoDataOutput *backOutput;
 @property (nonatomic, strong) AVCaptureVideoDataOutput *frontOutput;
-@property (nonatomic, strong) AVCapturePhotoOutput *photoOutput;
 @property (nonatomic, strong) UIView *backPreviewView;
 @property (nonatomic, strong) UIView *frontPreviewView;
 @property (nonatomic, strong) UIImageView *backImageView;
@@ -162,6 +161,15 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self sendResult:YES message:@"插件工作正常！" callback:callback];
 }
 
+#pragma mark - 获取摄像头当前分辨率（只读取，不修改）
+- (CGSize)getCameraResolution:(AVCaptureDevice *)device {
+    if (!device || !device.activeFormat) {
+        return CGSizeMake(1920, 1080); // 默认 16:9
+    }
+    CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription);
+    return CGSizeMake(dims.width, dims.height);
+}
+
 - (void)openDualCamera:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     [self.logs removeAllObjects];
     self.currentCallback = callback;
@@ -216,8 +224,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
+            // 创建多摄会话
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
             
+            // 获取后置摄像头
             AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
                                                                               mediaType:AVMediaTypeVideo
                                                                                position:AVCaptureDevicePositionBack];
@@ -227,6 +237,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
+            // 为后置摄像头设置最佳格式（最高分辨率）
+            [self configureBestFormatForDevice:backCamera];
+            
+            // 获取前置摄像头
             AVCaptureDevice *frontCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
                                                                                mediaType:AVMediaTypeVideo
                                                                                 position:AVCaptureDevicePositionFront];
@@ -235,6 +249,17 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self sendResult:NO message:@"找不到前置摄像头" callback:self.currentCallback];
                 return;
             }
+            
+            // 为前置摄像头设置最佳格式（最高分辨率）
+            [self configureBestFormatForDevice:frontCamera];
+            
+            // 获取摄像头默认分辨率（只读取，不修改）
+            CGSize backResolution = [self getCameraResolution:backCamera];
+            [self addLog:[NSString stringWithFormat:@"摄像头原始分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
+            
+            // 旋转后竖屏显示的比例 = 原始高度 / 原始宽度
+            CGFloat displayAspectRatio = backResolution.height / backResolution.width;
+            [self addLog:[NSString stringWithFormat:@"竖屏显示比例: %.2f (高/宽)", displayAspectRatio]];
             
             // 添加后置输入
             NSError *error = nil;
@@ -257,14 +282,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.multiCamSession addInput:self.frontInput];
             [self addLog:@"✅ 前置输入添加成功"];
             
-            // ✅ 添加拍照输出（一个输出即可，连接会区分前后）
-            self.photoOutput = [[AVCapturePhotoOutput alloc] init];
-            if ([self.multiCamSession canAddOutput:self.photoOutput]) {
-                [self.multiCamSession addOutput:self.photoOutput];
-                [self addLog:@"✅ 拍照输出添加成功"];
-            }
-            
-            // 添加后置预览输出
+            // 添加后置视频输出
             self.backOutput = [[AVCaptureVideoDataOutput alloc] init];
             self.backOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
             [self.backOutput setSampleBufferDelegate:self queue:self.videoQueue];
@@ -273,14 +291,16 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self.multiCamSession addOutputWithNoConnections:self.backOutput];
                 if (self.backInput.ports.count > 0) {
                     AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
-                    if (backConnection && [self.multiCamSession canAddConnection:backConnection]) {
-                        [self.multiCamSession addConnection:backConnection];
-                        [self addLog:@"✅ 后置预览输出添加成功"];
+                    if (backConnection) {
+                        if ([self.multiCamSession canAddConnection:backConnection]) {
+                            [self.multiCamSession addConnection:backConnection];
+                            [self addLog:@"✅ 后置视频输出添加成功"];
+                        }
                     }
                 }
             }
             
-            // 添加前置预览输出
+            // 添加前置视频输出
             self.frontOutput = [[AVCaptureVideoDataOutput alloc] init];
             self.frontOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
             [self.frontOutput setSampleBufferDelegate:self queue:self.videoQueue];
@@ -295,7 +315,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                         }
                         if ([self.multiCamSession canAddConnection:frontConnection]) {
                             [self.multiCamSession addConnection:frontConnection];
-                            [self addLog:@"✅ 前置预览输出添加成功"];
+                            [self addLog:@"✅ 前置视频输出添加成功"];
                         }
                     }
                 }
@@ -309,7 +329,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 后置预览视图（全屏）
+            // 后置预览视图（全屏）- 旋转90度
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
@@ -317,15 +337,18 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor blackColor];
+            // 后置旋转90度
             self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             [self.backPreviewView addSubview:self.backImageView];
-            [self addLog:@"✅ 后置预览视图已创建"];
+            [self addLog:@"✅ 后置预览视图已创建（旋转90度）"];
             
-            // 前置预览小窗 - 竖屏比例
+            // 前置预览小窗 - 竖屏比例，宽度120，高度根据比例计算
             CGFloat smallWidth = 120;
-            CGFloat smallHeight = 213;
+            CGFloat smallHeight = smallWidth / displayAspectRatio;  // 120 / 0.5625 ≈ 213
             CGFloat margin = 16;
             CGFloat topOffset = 100;
+            
+            [self addLog:[NSString stringWithFormat:@"小窗尺寸: %.0f x %.0f", smallWidth, smallHeight]];
             
             self.frontPreviewView = [[UIView alloc] initWithFrame:CGRectMake(
                 topVC.view.bounds.size.width - smallWidth - margin,
@@ -342,10 +365,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
+            // 前置旋转90度 + 镜像
             self.frontImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
-            [self addLog:@"✅ 前置预览小窗已创建"];
+            [self addLog:@"✅ 前置预览小窗已创建（旋转90度+镜像）"];
             
             // 返回按钮
             self.closeButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -401,45 +425,88 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.waitingForFrontPhoto = YES;
     self.backImage = nil;
     self.frontImage = nil;
-    
-    // ✅ 使用一个拍照输出，设置请求两张照片（前后各一张）
-    AVCapturePhotoSettings *settings = [AVCapturePhotoSettings photoSettings];
-    [self.photoOutput capturePhotoWithSettings:settings delegate:self];
 }
 
-#pragma mark - AVCapturePhotoCaptureDelegate
+- (void)closeDualCameraAndCleanup {
+    [self addLog:@"关闭双摄并释放资源"];
+    
+    if (self.multiCamSession) {
+        [self.multiCamSession stopRunning];
+        
+        if (self.backOutput) {
+            [self.backOutput setSampleBufferDelegate:nil queue:NULL];
+        }
+        if (self.frontOutput) {
+            [self.frontOutput setSampleBufferDelegate:nil queue:NULL];
+        }
+        
+        [self.backPreviewView removeFromSuperview];
+        [self.frontPreviewView removeFromSuperview];
+        [self.closeButton removeFromSuperview];
+        [self.captureButton removeFromSuperview];
+        
+        self.multiCamSession = nil;
+        self.backInput = nil;
+        self.frontInput = nil;
+        self.backOutput = nil;
+        self.frontOutput = nil;
+        self.backImageView = nil;
+        self.frontImageView = nil;
+        self.backPreviewView = nil;
+        self.frontPreviewView = nil;
+        self.closeButton = nil;
+        self.captureButton = nil;
+        
+        [self addLog:@"✅ 资源已释放"];
+    }
+}
 
-- (void)captureOutput:(AVCapturePhotoOutput *)output didFinishProcessingPhoto:(AVCapturePhoto *)photo error:(NSError *)error {
-    if (error) {
-        [self addLog:[NSString stringWithFormat:@"拍照失败: %@", error.localizedDescription]];
-        self.isTakingPhoto = NO;
-        return;
+- (void)closeButtonTapped {
+    [self addLog:@"用户点击返回，取消拍照"];
+    [self closeDualCameraAndCleanup];
+    [self sendResult:NO message:@"用户取消" callback:self.currentCallback];
+}
+
+#pragma mark - AVCaptureVideoDataOutputSampleBufferDelegate
+
+- (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
+    if (!sampleBuffer) return;
+    
+    UIImageView *targetImageView = nil;
+    
+    if (output == self.backOutput) {
+        targetImageView = self.backImageView;
+    } else if (output == self.frontOutput) {
+        targetImageView = self.frontImageView;
     }
     
-    NSData *imageData = [photo fileDataRepresentation];
-    UIImage *image = [UIImage imageWithData:imageData];
+    if (!targetImageView) return;
     
-    if (!image) {
-        [self addLog:@"图片数据转换失败"];
-        return;
-    }
-    
-    // 判断是后置还是前置（通过照片尺寸或方向判断，这里简化处理）
-    // 实际上 captureOutput 会被调用两次（前后各一次），我们需要区分
-    if (self.waitingForBackPhoto) {
-        // 先收到的认为是后置
-        self.backImage = image;
-        self.waitingForBackPhoto = NO;
-        [self addLog:[NSString stringWithFormat:@"✅ 后置照片已捕获: %.0fx%.0f", image.size.width, image.size.height]];
-    } else if (self.waitingForFrontPhoto) {
-        self.frontImage = image;
-        self.waitingForFrontPhoto = NO;
-        [self addLog:[NSString stringWithFormat:@"✅ 前置照片已捕获: %.0fx%.0f", image.size.width, image.size.height]];
-    }
-    
-    // 检查是否两张照片都拍好了
-    if (!self.waitingForBackPhoto && !self.waitingForFrontPhoto) {
-        [self saveBothPhotosAndClose];
+    UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
+    if (image) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (targetImageView.superview) {
+                targetImageView.image = image;
+            }
+            
+            if (self.isTakingPhoto) {
+                if (output == self.backOutput && self.waitingForBackPhoto) {
+                    self.backImage = image;
+                    self.waitingForBackPhoto = NO;
+                    [self addLog:@"✅ 后置照片已捕获"];
+                } else if (output == self.frontOutput && self.waitingForFrontPhoto) {
+                    self.frontImage = image;
+                    self.waitingForFrontPhoto = NO;
+                    [self addLog:@"✅ 前置照片已捕获"];
+                }
+                
+                if (!self.waitingForBackPhoto && !self.waitingForFrontPhoto) {
+                    // 立即停止拍照，避免重复保存
+                    self.isTakingPhoto = NO;
+                    [self saveBothPhotosAndClose];
+                }
+            }
+        });
     }
 }
 
@@ -507,72 +574,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         
         self.isTakingPhoto = NO;
     });
-}
-
-- (void)closeDualCameraAndCleanup {
-    [self addLog:@"关闭双摄并释放资源"];
-    
-    if (self.multiCamSession) {
-        [self.multiCamSession stopRunning];
-        
-        if (self.backOutput) {
-            [self.backOutput setSampleBufferDelegate:nil queue:NULL];
-        }
-        if (self.frontOutput) {
-            [self.frontOutput setSampleBufferDelegate:nil queue:NULL];
-        }
-        
-        [self.backPreviewView removeFromSuperview];
-        [self.frontPreviewView removeFromSuperview];
-        [self.closeButton removeFromSuperview];
-        [self.captureButton removeFromSuperview];
-        
-        self.multiCamSession = nil;
-        self.backInput = nil;
-        self.frontInput = nil;
-        self.backOutput = nil;
-        self.frontOutput = nil;
-        self.photoOutput = nil;
-        self.backImageView = nil;
-        self.frontImageView = nil;
-        self.backPreviewView = nil;
-        self.frontPreviewView = nil;
-        self.closeButton = nil;
-        self.captureButton = nil;
-        
-        [self addLog:@"✅ 资源已释放"];
-    }
-}
-
-- (void)closeButtonTapped {
-    [self addLog:@"用户点击返回，取消拍照"];
-    [self closeDualCameraAndCleanup];
-    [self sendResult:NO message:@"用户取消" callback:self.currentCallback];
-}
-
-#pragma mark - AVCaptureVideoDataOutputSampleBufferDelegate
-
-- (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
-    if (!sampleBuffer) return;
-    
-    UIImageView *targetImageView = nil;
-    
-    if (output == self.backOutput) {
-        targetImageView = self.backImageView;
-    } else if (output == self.frontOutput) {
-        targetImageView = self.frontImageView;
-    }
-    
-    if (!targetImageView) return;
-    
-    UIImage *image = [self imageFromSampleBuffer:sampleBuffer];
-    if (image) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (targetImageView.superview) {
-                targetImageView.image = image;
-            }
-        });
-    }
 }
 
 - (UIImage *)imageFromSampleBuffer:(CMSampleBufferRef)sampleBuffer {
