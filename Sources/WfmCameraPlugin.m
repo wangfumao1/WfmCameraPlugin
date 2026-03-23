@@ -28,7 +28,7 @@
 @property (nonatomic, strong) UIImage *frontImage;
 @property (nonatomic, assign) BOOL waitingForBackPhoto;
 @property (nonatomic, assign) BOOL waitingForFrontPhoto;
-@property (nonatomic, assign) BOOL isTakingPhoto;  // 是否正在拍照中
+@property (nonatomic, assign) BOOL isTakingPhoto;
 
 @end
 
@@ -77,7 +77,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.currentCallback = nil;
 }
 
-// 发送拍照结果（关闭双摄后返回）
+// 发送拍照结果
 - (void)sendPhotoResult:(NSString *)backPath frontPath:(NSString *)frontPath {
     if (self.currentCallback) {
         NSMutableDictionary *result = [NSMutableDictionary dictionary];
@@ -163,12 +163,12 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self addLog:@"========== test 方法开始 =========="];
     [self addLog:@"测试第一条日志"];
     [self addLog:@"测试第二条日志"];
-   self addLog:@"测试第三条日志"];
+    [self addLog:@"测试第三条日志"];  // ✅ 修复：添加 [self
     [self addLog:@"========== test 方法结束 =========="];
     [self sendResult:YES message:@"插件工作正常！" callback:callback];
 }
 
-// 打开双摄（包含拍照和关闭逻辑）
+// 打开双摄
 - (void)openDualCamera:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     [self.logs removeAllObjects];
     self.currentCallback = callback;
@@ -218,28 +218,98 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     }
 }
 
-// 设置双摄预览
+// 设置双摄预览（简化版，包含完整逻辑）
 - (void)setupDualCamera API_AVAILABLE(ios(13.0)) {
-    [self addLog:@"========== 开始设置双摄 =========="];
+    [self addLog:@"开始设置双摄..."];
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // 步骤1: 创建多摄会话
+            // 创建多摄会话
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
-            [self addLog:@"步骤1: ✅ 多摄会话创建成功"];
             
-            // 步骤2-7: 获取摄像头和添加输入输出（省略，和之前一样）
-            // ... 这里放之前步骤2-7的代码 ...
+            // 获取后置摄像头
+            AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                                                              mediaType:AVMediaTypeVideo
+                                                                               position:AVCaptureDevicePositionBack];
+            if (!backCamera) {
+                [self addLog:@"❌ 找不到后置摄像头"];
+                [self sendResult:NO message:@"找不到后置摄像头" callback:self.currentCallback];
+                return;
+            }
             
-            // 步骤8: 获取当前视图
+            // 获取前置摄像头
+            AVCaptureDevice *frontCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                                                               mediaType:AVMediaTypeVideo
+                                                                                position:AVCaptureDevicePositionFront];
+            if (!frontCamera) {
+                [self addLog:@"❌ 找不到前置摄像头"];
+                [self sendResult:NO message:@"找不到前置摄像头" callback:self.currentCallback];
+                return;
+            }
+            
+            // 添加后置输入
+            NSError *error = nil;
+            self.backInput = [AVCaptureDeviceInput deviceInputWithDevice:backCamera error:&error];
+            if (error || ![self.multiCamSession canAddInput:self.backInput]) {
+                [self addLog:@"❌ 无法添加后置输入"];
+                [self sendResult:NO message:@"后置摄像头添加失败" callback:self.currentCallback];
+                return;
+            }
+            [self.multiCamSession addInput:self.backInput];
+            
+            // 添加前置输入
+            self.frontInput = [AVCaptureDeviceInput deviceInputWithDevice:frontCamera error:&error];
+            if (error || ![self.multiCamSession canAddInput:self.frontInput]) {
+                [self addLog:@"❌ 无法添加前置输入"];
+                [self sendResult:NO message:@"前置摄像头添加失败" callback:self.currentCallback];
+                return;
+            }
+            [self.multiCamSession addInput:self.frontInput];
+            
+            // 添加后置视频输出
+            self.backOutput = [[AVCaptureVideoDataOutput alloc] init];
+            self.backOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
+            [self.backOutput setSampleBufferDelegate:self queue:self.videoQueue];
+            
+            if ([self.multiCamSession canAddOutput:self.backOutput]) {
+                [self.multiCamSession addOutputWithNoConnections:self.backOutput];
+                if (self.backInput.ports.count > 0) {
+                    AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
+                    if (backConnection && [self.multiCamSession canAddConnection:backConnection]) {
+                        [self.multiCamSession addConnection:backConnection];
+                    }
+                }
+            }
+            
+            // 添加前置视频输出
+            self.frontOutput = [[AVCaptureVideoDataOutput alloc] init];
+            self.frontOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
+            [self.frontOutput setSampleBufferDelegate:self queue:self.videoQueue];
+            
+            if ([self.multiCamSession canAddOutput:self.frontOutput]) {
+                [self.multiCamSession addOutputWithNoConnections:self.frontOutput];
+                if (self.frontInput.ports.count > 0) {
+                    AVCaptureConnection *frontConnection = [AVCaptureConnection connectionWithInputPorts:self.frontInput.ports output:self.frontOutput];
+                    if (frontConnection) {
+                        if (frontConnection.isVideoMirroringSupported) {
+                            frontConnection.videoMirrored = YES;
+                        }
+                        if ([self.multiCamSession canAddConnection:frontConnection]) {
+                            [self.multiCamSession addConnection:frontConnection];
+                        }
+                    }
+                }
+            }
+            
+            // 获取当前视图
             UIViewController *topVC = [self getTopViewController];
             if (!topVC) {
-                [self addLog:@"步骤8: ❌ 无法获取当前视图"];
+                [self addLog:@"❌ 无法获取当前视图"];
                 [self sendResult:NO message:@"无法获取当前视图" callback:self.currentCallback];
                 return;
             }
             
-            // 步骤9: 创建后置预览视图
+            // 创建后置预览视图
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
@@ -250,7 +320,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             [self.backPreviewView addSubview:self.backImageView];
             
-            // 步骤10: 创建前置预览小窗
+            // 创建前置预览小窗
             CGFloat smallWidth = 120;
             CGFloat smallHeight = 160;
             CGFloat margin = 16;
@@ -275,7 +345,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
             
-            // 步骤11: 创建返回按钮
+            // 创建返回按钮
             self.closeButton = [UIButton buttonWithType:UIButtonTypeCustom];
             self.closeButton.frame = CGRectMake(20, 50, 44, 44);
             self.closeButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
@@ -285,7 +355,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.closeButton addTarget:self action:@selector(closeButtonTapped) forControlEvents:UIControlEventTouchUpInside];
             [topVC.view addSubview:self.closeButton];
             
-            // 步骤12: 创建圆形拍照按钮
+            // 创建圆形拍照按钮
             CGFloat buttonSize = 70;
             self.captureButton = [UIButton buttonWithType:UIButtonTypeCustom];
             self.captureButton.frame = CGRectMake(
@@ -301,7 +371,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.captureButton addTarget:self action:@selector(captureButtonTapped) forControlEvents:UIControlEventTouchUpInside];
             [topVC.view addSubview:self.captureButton];
             
-            // 步骤13: 启动会话
+            // 启动会话
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
                 [self.multiCamSession startRunning];
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -326,7 +396,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self addLog:@"📷 开始拍照"];
     self.isTakingPhoto = YES;
     
-    // 开始等待前后帧
     self.waitingForBackPhoto = YES;
     self.waitingForFrontPhoto = YES;
     self.backImage = nil;
@@ -381,14 +450,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (!sampleBuffer) return;
     
     UIImageView *targetImageView = nil;
-    UIImage **targetImage = nil;
     
     if (output == self.backOutput) {
         targetImageView = self.backImageView;
-        targetImage = &_backImage;
     } else if (output == self.frontOutput) {
         targetImageView = self.frontImageView;
-        targetImage = &_frontImage;
     }
     
     if (!targetImageView) return;
@@ -401,13 +467,13 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             }
             
             // 如果正在等待拍照，保存图片
-            if (self.isTakingPhoto && targetImage) {
-                *targetImage = image;
-                
+            if (self.isTakingPhoto) {
                 if (output == self.backOutput) {
+                    self.backImage = image;
                     self.waitingForBackPhoto = NO;
                     [self addLog:@"✅ 后置照片已捕获"];
                 } else if (output == self.frontOutput) {
+                    self.frontImage = image;
                     self.waitingForFrontPhoto = NO;
                     [self addLog:@"✅ 前置照片已捕获"];
                 }
@@ -424,7 +490,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 - (void)saveBothPhotosAndClose {
     [self addLog:@"开始保存前后照片..."];
     
-    // 检查相册权限
     PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
     
     if (status == PHAuthorizationStatusNotDetermined) {
@@ -453,8 +518,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     __block NSString *frontPath = nil;
     __block NSError *backError = nil;
     __block NSError *frontError = nil;
-    __block BOOL backSaved = NO;
-    __block BOOL frontSaved = NO;
     
     dispatch_group_t group = dispatch_group_create();
     
@@ -464,11 +527,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         [self saveImageToPhotoLibrary:self.backImage completion:^(NSString *path, NSError *error) {
             backPath = path;
             backError = error;
-            backSaved = YES;
             dispatch_group_leave(group);
         }];
-    } else {
-        backSaved = YES;
     }
     
     // 保存前置照片
@@ -477,21 +537,14 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         [self saveImageToPhotoLibrary:self.frontImage completion:^(NSString *path, NSError *error) {
             frontPath = path;
             frontError = error;
-            frontSaved = YES;
             dispatch_group_leave(group);
         }];
-    } else {
-        frontSaved = YES;
     }
     
-    // 等待保存完成
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         [self addLog:@"照片保存完成，关闭双摄"];
-        
-        // 关闭双摄
         [self closeDualCameraAndCleanup];
         
-        // 返回结果
         if (backError || frontError) {
             [self sendResult:NO message:@"部分照片保存失败" callback:self.currentCallback];
         } else {
@@ -533,7 +586,26 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 #pragma mark - 获取当前视图控制器
 
 - (UIViewController *)getTopViewController {
-    UIViewController *vc = [UIApplication sharedApplication].keyWindow.rootViewController;
+    UIViewController *vc = nil;
+    
+    if (@available(iOS 13.0, *)) {
+        for (UIWindowScene *windowScene in [UIApplication sharedApplication].connectedScenes) {
+            if (windowScene.activationState == UISceneActivationStateForegroundActive) {
+                for (UIWindow *window in windowScene.windows) {
+                    if (window.isKeyWindow) {
+                        vc = window.rootViewController;
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        vc = [UIApplication sharedApplication].keyWindow.rootViewController;
+        #pragma clang diagnostic pop
+    }
+    
     UIViewController *currentShowingVC = [self findCurrentShowingViewControllerFrom:vc];
     return currentShowingVC;
 }
