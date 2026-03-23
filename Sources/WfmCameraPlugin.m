@@ -284,47 +284,16 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 步骤8: 获取当前视图（关键修复）
+            // 步骤8: 获取当前视图（基于官方文档）
             [self addLog:@"步骤8: 获取当前视图..."];
-            UIViewController *topVC = nil;
-            
-            // 方法1：通过 DCUniModule 的 uniInstance 获取（最可靠）
-            if (self.uniInstance && self.uniInstance.viewController) {
-                topVC = self.uniInstance.viewController;
-                [self addLog:[NSString stringWithFormat:@"步骤8: ✅ 通过 uniInstance 获取到视图: %@", NSStringFromClass([topVC class])]];
-            }
-            
-            // 方法2：如果方法1失败，尝试通过 UIApplication 获取
-            if (!topVC) {
-                if (@available(iOS 13.0, *)) {
-                    for (UIWindowScene *windowScene in [UIApplication sharedApplication].connectedScenes) {
-                        if (windowScene.activationState == UISceneActivationStateForegroundActive) {
-                            for (UIWindow *window in windowScene.windows) {
-                                if (window.isKeyWindow) {
-                                    topVC = window.rootViewController;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-                }
-                
-                while (topVC.presentedViewController) {
-                    topVC = topVC.presentedViewController;
-                }
-                if ([topVC isKindOfClass:[UINavigationController class]]) {
-                    topVC = [(UINavigationController *)topVC visibleViewController];
-                }
-                [self addLog:[NSString stringWithFormat:@"步骤8: ✅ 通过 window 获取到视图: %@", NSStringFromClass([topVC class])]];
-            }
+            UIViewController *topVC = [self getTopViewController];
             
             if (!topVC) {
                 [self addLog:@"步骤8: ❌ 无法获取当前视图"];
                 [self sendResult:NO message:@"无法获取当前视图" callback:self.currentCallback];
                 return;
             }
+            [self addLog:[NSString stringWithFormat:@"步骤8: ✅ 当前视图: %@", NSStringFromClass([topVC class])]];
             
             // 步骤9: 创建后置预览视图
             [self addLog:@"步骤9: 创建后置预览视图..."];
@@ -475,6 +444,38 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     CVPixelBufferUnlockBaseAddress(imageBuffer, 0);
     
     return image;
+}
+
+#pragma mark - 获取当前视图控制器（基于官方文档）
+
+// 获取当前显示的 UIViewController
+- (UIViewController *)getTopViewController {
+    // 获得当前活动窗口的根视图
+    UIViewController *vc = [UIApplication sharedApplication].keyWindow.rootViewController;
+    UIViewController *currentShowingVC = [self findCurrentShowingViewControllerFrom:vc];
+    return currentShowingVC;
+}
+
+- (UIViewController *)findCurrentShowingViewControllerFrom:(UIViewController *)vc {
+    // 递归方法 Recursive method
+    UIViewController *currentShowingVC;
+    if ([vc presentedViewController]) {
+        // 当前视图是被presented出来的
+        UIViewController *nextRootVC = [vc presentedViewController];
+        currentShowingVC = [self findCurrentShowingViewControllerFrom:nextRootVC];
+    } else if ([vc isKindOfClass:[UITabBarController class]]) {
+        // 根视图为UITabBarController
+        UIViewController *nextRootVC = [(UITabBarController *)vc selectedViewController];
+        currentShowingVC = [self findCurrentShowingViewControllerFrom:nextRootVC];
+    } else if ([vc isKindOfClass:[UINavigationController class]]) {
+        // 根视图为UINavigationController
+        UIViewController *nextRootVC = [(UINavigationController *)vc visibleViewController];
+        currentShowingVC = [self findCurrentShowingViewControllerFrom:nextRootVC];
+    } else {
+        // 根视图为非导航类
+        currentShowingVC = vc;
+    }
+    return currentShowingVC;
 }
 
 - (void)dealloc {
