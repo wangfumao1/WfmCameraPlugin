@@ -16,7 +16,7 @@
 @property (nonatomic, strong) dispatch_queue_t videoQueue;
 @property (nonatomic, assign) CGColorSpaceRef colorSpace;
 @property (nonatomic, strong) NSMutableArray *logs;
-@property (nonatomic, strong) UniModuleKeepAliveCallback currentCallback;  // 保存当前回调
+@property (nonatomic, strong) UniModuleKeepAliveCallback currentCallback;
 
 @end
 
@@ -37,7 +37,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return self;
 }
 
-// 添加日志到数组（不立即回调）
+// 添加日志到数组
 - (void)addLog:(NSString *)message {
     if (!self.logs) {
         self.logs = [NSMutableArray array];
@@ -46,7 +46,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     NSLog(@"[WfmCameraPlugin] %@", message);
 }
 
-// 发送最终结果（带所有日志）
+// 发送最终结果
 - (void)sendResult:(BOOL)success message:(NSString *)message callback:(UniModuleKeepAliveCallback)callback {
     if (callback) {
         NSMutableDictionary *result = [NSMutableDictionary dictionary];
@@ -59,15 +59,13 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         }
         callback(result, NO);
     }
-    // 清空日志
     if (self.logs) {
         [self.logs removeAllObjects];
     }
-    // 清空回调引用
     self.currentCallback = nil;
 }
 
-// log 方法（供前端调用）
+// log 方法
 - (void)log:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     NSString *message = options[@"message"] ?: @"";
     [self addLog:message];
@@ -147,7 +145,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             // 步骤1: 创建多摄会话
             [self addLog:@"步骤1: 创建多摄会话..."];
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
-            // 注意：AVCaptureMultiCamSession 不支持设置 sessionPreset
+            // 注意：AVCaptureMultiCamSession 不支持设置 sessionPreset，使用默认值
             [self addLog:@"步骤1: ✅ 多摄会话创建成功"];
             
             // 步骤2: 获取后置摄像头
@@ -286,15 +284,47 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 步骤8: 获取当前视图
+            // 步骤8: 获取当前视图（关键修复）
             [self addLog:@"步骤8: 获取当前视图..."];
-            UIViewController *topVC = [self getTopViewController];
+            UIViewController *topVC = nil;
+            
+            // 方法1：通过 DCUniModule 的 uniInstance 获取（最可靠）
+            if (self.uniInstance && self.uniInstance.viewController) {
+                topVC = self.uniInstance.viewController;
+                [self addLog:[NSString stringWithFormat:@"步骤8: ✅ 通过 uniInstance 获取到视图: %@", NSStringFromClass([topVC class])]];
+            }
+            
+            // 方法2：如果方法1失败，尝试通过 UIApplication 获取
+            if (!topVC) {
+                if (@available(iOS 13.0, *)) {
+                    for (UIWindowScene *windowScene in [UIApplication sharedApplication].connectedScenes) {
+                        if (windowScene.activationState == UISceneActivationStateForegroundActive) {
+                            for (UIWindow *window in windowScene.windows) {
+                                if (window.isKeyWindow) {
+                                    topVC = window.rootViewController;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+                }
+                
+                while (topVC.presentedViewController) {
+                    topVC = topVC.presentedViewController;
+                }
+                if ([topVC isKindOfClass:[UINavigationController class]]) {
+                    topVC = [(UINavigationController *)topVC visibleViewController];
+                }
+                [self addLog:[NSString stringWithFormat:@"步骤8: ✅ 通过 window 获取到视图: %@", NSStringFromClass([topVC class])]];
+            }
+            
             if (!topVC) {
                 [self addLog:@"步骤8: ❌ 无法获取当前视图"];
                 [self sendResult:NO message:@"无法获取当前视图" callback:self.currentCallback];
                 return;
             }
-            [self addLog:[NSString stringWithFormat:@"步骤8: ✅ 当前视图: %@", NSStringFromClass([topVC class])]];
             
             // 步骤9: 创建后置预览视图
             [self addLog:@"步骤9: 创建后置预览视图..."];
@@ -451,37 +481,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (self.colorSpace) {
         CGColorSpaceRelease(self.colorSpace);
     }
-}
-
-// 获取当前视图控制器
-- (UIViewController *)getTopViewController {
-    UIViewController *topVC = nil;
-    
-    if (@available(iOS 13.0, *)) {
-        for (UIWindowScene *windowScene in [UIApplication sharedApplication].connectedScenes) {
-            if (windowScene.activationState == UISceneActivationStateForegroundActive) {
-                for (UIWindow *window in windowScene.windows) {
-                    if (window.isKeyWindow) {
-                        topVC = window.rootViewController;
-                        break;
-                    }
-                }
-            }
-        }
-    } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-#pragma clang diagnostic pop
-    }
-    
-    while (topVC.presentedViewController) {
-        topVC = topVC.presentedViewController;
-    }
-    if ([topVC isKindOfClass:[UINavigationController class]]) {
-        topVC = [(UINavigationController *)topVC visibleViewController];
-    }
-    return topVC;
 }
 
 @end
