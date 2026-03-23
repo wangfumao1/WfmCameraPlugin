@@ -161,10 +161,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self sendResult:YES message:@"插件工作正常！" callback:callback];
 }
 
-#pragma mark - 获取摄像头当前分辨率（不修改，只读取）
+#pragma mark - 获取摄像头当前分辨率（只读取，不修改）
 - (CGSize)getCameraResolution:(AVCaptureDevice *)device {
     if (!device || !device.activeFormat) {
-        return CGSizeMake(16, 9); // 默认 16:9
+        return CGSizeMake(1920, 1080); // 默认 16:9
     }
     CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription);
     return CGSizeMake(dims.width, dims.height);
@@ -224,7 +224,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // 创建多摄会话（不设置分辨率，使用系统默认）
+            // 创建多摄会话
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
             
             // 获取后置摄像头
@@ -247,15 +247,13 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // ✅ 获取摄像头默认分辨率（只读取，不修改）
+            // 获取摄像头默认分辨率（只读取，不修改）
             CGSize backResolution = [self getCameraResolution:backCamera];
-            CGSize frontResolution = [self getCameraResolution:frontCamera];
-            [self addLog:[NSString stringWithFormat:@"后置默认分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
-            [self addLog:[NSString stringWithFormat:@"前置默认分辨率: %.0fx%.0f", frontResolution.width, frontResolution.height]];
+            [self addLog:[NSString stringWithFormat:@"摄像头原始分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
             
-            // 使用后置分辨率计算比例（前后分辨率通常一致）
-            CGFloat aspectRatio = backResolution.width / backResolution.height;
-            [self addLog:[NSString stringWithFormat:@"画面比例: %.2f (%.0f:%.0f)", aspectRatio, backResolution.width, backResolution.height]];
+            // 旋转后竖屏显示的比例 = 原始高度 / 原始宽度
+            CGFloat displayAspectRatio = backResolution.height / backResolution.width;
+            [self addLog:[NSString stringWithFormat:@"竖屏显示比例: %.2f (高/宽)", displayAspectRatio]];
             
             // 添加后置输入
             NSError *error = nil;
@@ -325,7 +323,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 后置预览视图（全屏）
+            // 后置预览视图（全屏）- 旋转90度
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
@@ -333,17 +331,18 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor blackColor];
+            // 后置旋转90度
+            self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             [self.backPreviewView addSubview:self.backImageView];
-            [self addLog:@"✅ 后置预览视图已创建"];
+            [self addLog:@"✅ 后置预览视图已创建（旋转90度）"];
             
-            // ✅ 前置预览小窗 - 根据摄像头比例动态计算尺寸，最大宽度120
-            CGFloat maxWidth = 120;
-            CGFloat smallWidth = maxWidth;
-            CGFloat smallHeight = smallWidth / aspectRatio;  // 按比例计算高度
+            // 前置预览小窗 - 竖屏比例，宽度120，高度根据比例计算
+            CGFloat smallWidth = 120;
+            CGFloat smallHeight = smallWidth / displayAspectRatio;  // 120 / 0.5625 ≈ 213
             CGFloat margin = 16;
             CGFloat topOffset = 100;
             
-            [self addLog:[NSString stringWithFormat:@"小窗尺寸: %.0f x %.0f (比例 %.2f)", smallWidth, smallHeight, aspectRatio]];
+            [self addLog:[NSString stringWithFormat:@"小窗尺寸: %.0f x %.0f", smallWidth, smallHeight]];
             
             self.frontPreviewView = [[UIView alloc] initWithFrame:CGRectMake(
                 topVC.view.bounds.size.width - smallWidth - margin,
@@ -360,8 +359,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
+            // 前置旋转90度 + 镜像
+            self.frontImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
+            self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
-            [self addLog:@"✅ 前置预览小窗已创建"];
+            [self addLog:@"✅ 前置预览小窗已创建（旋转90度+镜像）"];
             
             // 返回按钮
             self.closeButton = [UIButton buttonWithType:UIButtonTypeCustom];
