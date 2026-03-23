@@ -15,6 +15,7 @@
 @property (nonatomic, strong) UIImageView *frontImageView;
 @property (nonatomic, strong) dispatch_queue_t videoQueue;
 @property (nonatomic, assign) CGColorSpaceRef colorSpace;
+@property (nonatomic, strong) NSMutableArray *logs;
 
 @end
 
@@ -31,6 +32,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (self) {
         // 创建视频处理队列
         _videoQueue = dispatch_queue_create("com.wfm.camera.queue", DISPATCH_QUEUE_SERIAL);
+        // 初始化日志数组
+        _logs = [NSMutableArray array];
     }
     return self;
 }
@@ -46,25 +49,40 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
 - (void)logMessage:(NSString *)message callback:(UniModuleKeepAliveCallback)callback {
     NSLog(@"[WfmCameraPlugin] %@", message);
-    if (callback) {
-        callback(@{@"success": @YES, @"log": message}, NO);
-    }
+    [self.logs addObject:message];
 }
 
 - (void)logError:(NSString *)message error:(NSError *)error callback:(UniModuleKeepAliveCallback)callback {
     NSString *fullMsg = [NSString stringWithFormat:@"❌ %@: %@", message, error.localizedDescription];
     NSLog(@"[WfmCameraPlugin] %@", fullMsg);
+    [self.logs addObject:fullMsg];
+}
+
+// 发送最终结果
+- (void)sendResult:(BOOL)success message:(NSString *)message callback:(UniModuleKeepAliveCallback)callback {
     if (callback) {
-        callback(@{@"success": @NO, @"log": fullMsg, @"error": error.localizedDescription}, NO);
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        result[@"success"] = @(success);
+        if (message) {
+            result[@"msg"] = message;
+        }
+        if (self.logs.count > 0) {
+            result[@"logs"] = self.logs;
+        }
+        callback(result, NO);
     }
+    // 清空日志
+    [self.logs removeAllObjects];
 }
 
 // test 方法
 - (void)test:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
-    [self logMessage:@"test 方法被调用" callback:callback];
-    if (callback) {
-        callback(@{@"success": @YES, @"msg": @"插件工作正常！"}, NO);
-    }
+    [self logMessage:@"test 方法开始" callback:callback];
+    [self logMessage:@"测试第一条日志" callback:callback];
+    [self logMessage:@"测试第二条日志" callback:callback];
+    [self logMessage:@"测试第三条日志" callback:callback];
+    [self logMessage:@"test 方法结束" callback:callback];
+    [self sendResult:YES message:@"插件工作正常！" callback:callback];
 }
 
 // 打开双摄
@@ -77,9 +95,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self logMessage:@"iOS 13+ 检查通过" callback:callback];
         } else {
             [self logMessage:@"需要 iOS 13 或更高版本" callback:callback];
-            if (callback) {
-                callback(@{@"success": @NO, @"msg": @"需要 iOS 13 或更高版本"}, NO);
-            }
+            [self sendResult:NO message:@"需要 iOS 13 或更高版本" callback:callback];
             return;
         }
         
@@ -91,23 +107,19 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             if (status == AVAuthorizationStatusNotDetermined) {
                 [self logMessage:@"请求相机权限..." callback:callback];
                 [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
+                    dispatch_async(dispatch_get_main_queue(), ^{ 
                         if (granted) {
                             [self logMessage:@"权限已授权，开始打开双摄" callback:callback];
                             [self setupDualCamera:callback];
                         } else {
                             [self logMessage:@"用户拒绝相机权限" callback:callback];
-                            if (callback) {
-                                callback(@{@"success": @NO, @"msg": @"需要相机权限"}, NO);
-                            }
+                            [self sendResult:NO message:@"需要相机权限" callback:callback];
                         }
                     });
                 }];
             } else {
                 [self logMessage:@"相机权限未授权" callback:callback];
-                if (callback) {
-                    callback(@{@"success": @NO, @"msg": @"请先在设置中开启相机权限"}, NO);
-                }
+                [self sendResult:NO message:@"请先在设置中开启相机权限" callback:callback];
             }
             return;
         }
@@ -116,9 +128,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         [self setupDualCamera:callback];
     } @catch (NSException *exception) {
         [self logMessage:[NSString stringWithFormat:@"异常: %@", exception.reason] callback:callback];
-        if (callback) {
-            callback(@{@"success": @NO, @"msg": exception.reason}, NO);
-        }
+        [self sendResult:NO message:exception.reason callback:callback];
     }
 }
 
@@ -159,14 +169,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontImageView = nil;
             
             [self logMessage:@"双摄已关闭" callback:callback];
-            if (callback) {
-                callback(@{@"success": @YES, @"msg": @"双摄已关闭"}, NO);
-            }
+            [self sendResult:YES message:@"双摄已关闭" callback:callback];
         } else {
             [self logMessage:@"双摄未开启" callback:callback];
-            if (callback) {
-                callback(@{@"success": @YES, @"msg": @"双摄未开启"}, NO);
-            }
+            [self sendResult:YES message:@"双摄未开启" callback:callback];
         }
     });
 }
@@ -190,7 +196,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                                                                                position:AVCaptureDevicePositionBack];
             if (!backCamera) {
                 [self logMessage:@"步骤2: 找不到后置摄像头" callback:callback];
-                if (callback) callback(@{@"success": @NO, @"msg": @"找不到后置摄像头"}, NO);
+                [self sendResult:NO message:@"找不到后置摄像头" callback:callback];
                 return;
             }
             [self logMessage:[NSString stringWithFormat:@"步骤2: 找到后置摄像头: %@", backCamera.localizedName] callback:callback];
@@ -202,7 +208,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                                                                                 position:AVCaptureDevicePositionFront];
             if (!frontCamera) {
                 [self logMessage:@"步骤3: 找不到前置摄像头" callback:callback];
-                if (callback) callback(@{@"success": @NO, @"msg": @"找不到前置摄像头"}, NO);
+                [self sendResult:NO message:@"找不到前置摄像头" callback:callback];
                 return;
             }
             [self logMessage:[NSString stringWithFormat:@"步骤3: 找到前置摄像头: %@", frontCamera.localizedName] callback:callback];
@@ -213,7 +219,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.backInput = [AVCaptureDeviceInput deviceInputWithDevice:backCamera error:&error];
             if (error) {
                 [self logMessage:[NSString stringWithFormat:@"步骤4: 后置输入创建失败: %@", error.localizedDescription] callback:callback];
-                if (callback) callback(@{@"success": @NO, @"msg": @"后置摄像头初始化失败"}, NO);
+                [self sendResult:NO message:@"后置摄像头初始化失败" callback:callback];
                 return;
             }
             
@@ -222,7 +228,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self logMessage:@"步骤4: 后置输入添加成功" callback:callback];
             } else {
                 [self logMessage:@"步骤4: 无法添加后置输入" callback:callback];
-                if (callback) callback(@{@"success": @NO, @"msg": @"无法添加后置摄像头"}, NO);
+                [self sendResult:NO message:@"无法添加后置摄像头" callback:callback];
                 return;
             }
             
@@ -231,7 +237,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontInput = [AVCaptureDeviceInput deviceInputWithDevice:frontCamera error:&error];
             if (error) {
                 [self logMessage:[NSString stringWithFormat:@"步骤5: 前置输入创建失败: %@", error.localizedDescription] callback:callback];
-                if (callback) callback(@{@"success": @NO, @"msg": @"前置摄像头初始化失败"}, NO);
+                [self sendResult:NO message:@"前置摄像头初始化失败" callback:callback];
                 return;
             }
             
@@ -240,7 +246,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self logMessage:@"步骤5: 前置输入添加成功" callback:callback];
             } else {
                 [self logMessage:@"步骤5: 无法添加前置输入" callback:callback];
-                if (callback) callback(@{@"success": @NO, @"msg": @"无法添加前置摄像头"}, NO);
+                [self sendResult:NO message:@"无法添加前置摄像头" callback:callback];
                 return;
             }
             
@@ -254,15 +260,31 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self.multiCamSession addOutputWithNoConnections:self.backOutput];
                 
                 // 创建后置输出连接
-                AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
-                if ([self.multiCamSession canAddConnection:backConnection]) {
-                    [self.multiCamSession addConnection:backConnection];
-                    [self logMessage:@"步骤6: 后置视频输出添加成功" callback:callback];
+                if (self.backInput.ports.count > 0) {
+                    AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
+                    if (backConnection) {
+                        if ([self.multiCamSession canAddConnection:backConnection]) {
+                            [self.multiCamSession addConnection:backConnection];
+                            [self logMessage:@"步骤6: 后置视频输出添加成功" callback:callback];
+                        } else {
+                            [self logMessage:@"步骤6: 无法添加后置输出连接" callback:callback];
+                            [self sendResult:NO message:@"无法添加后置摄像头连接" callback:callback];
+                            return;
+                        }
+                    } else {
+                        [self logMessage:@"步骤6: 无法创建后置输出连接" callback:callback];
+                        [self sendResult:NO message:@"无法创建后置摄像头连接" callback:callback];
+                        return;
+                    }
                 } else {
-                    [self logMessage:@"步骤6: 无法添加后置输出连接" callback:callback];
+                    [self logMessage:@"步骤6: 后置输入端口为空" callback:callback];
+                    [self sendResult:NO message:@"后置摄像头端口为空" callback:callback];
+                    return;
                 }
             } else {
                 [self logMessage:@"步骤6: 无法添加后置视频输出" callback:callback];
+                [self sendResult:NO message:@"无法添加后置视频输出" callback:callback];
+                return;
             }
             
             // 7. 添加前置视频输出
@@ -275,18 +297,34 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self.multiCamSession addOutputWithNoConnections:self.frontOutput];
                 
                 // 创建前置输出连接
-                AVCaptureConnection *frontConnection = [AVCaptureConnection connectionWithInputPorts:self.frontInput.ports output:self.frontOutput];
-                if (frontConnection.isVideoMirroringSupported) {
-                    frontConnection.videoMirrored = YES;
-                }
-                if ([self.multiCamSession canAddConnection:frontConnection]) {
-                    [self.multiCamSession addConnection:frontConnection];
-                    [self logMessage:@"步骤7: 前置视频输出添加成功" callback:callback];
+                if (self.frontInput.ports.count > 0) {
+                    AVCaptureConnection *frontConnection = [AVCaptureConnection connectionWithInputPorts:self.frontInput.ports output:self.frontOutput];
+                    if (frontConnection) {
+                        if (frontConnection.isVideoMirroringSupported) {
+                            frontConnection.videoMirrored = YES;
+                        }
+                        if ([self.multiCamSession canAddConnection:frontConnection]) {
+                            [self.multiCamSession addConnection:frontConnection];
+                            [self logMessage:@"步骤7: 前置视频输出添加成功" callback:callback];
+                        } else {
+                            [self logMessage:@"步骤7: 无法添加前置输出连接" callback:callback];
+                            [self sendResult:NO message:@"无法添加前置摄像头连接" callback:callback];
+                            return;
+                        }
+                    } else {
+                        [self logMessage:@"步骤7: 无法创建前置输出连接" callback:callback];
+                        [self sendResult:NO message:@"无法创建前置摄像头连接" callback:callback];
+                        return;
+                    }
                 } else {
-                    [self logMessage:@"步骤7: 无法添加前置输出连接" callback:callback];
+                    [self logMessage:@"步骤7: 前置输入端口为空" callback:callback];
+                    [self sendResult:NO message:@"前置摄像头端口为空" callback:callback];
+                    return;
                 }
             } else {
                 [self logMessage:@"步骤7: 无法添加前置视频输出" callback:callback];
+                [self sendResult:NO message:@"无法添加前置视频输出" callback:callback];
+                return;
             }
             
             // 8. 获取当前视图并创建预览
@@ -294,7 +332,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             UIViewController *topVC = [self getTopViewController];
             if (!topVC) {
                 [self logMessage:@"步骤8: 无法获取当前视图" callback:callback];
-                if (callback) callback(@{@"success": @NO, @"msg": @"无法获取当前视图"}, NO);
+                [self sendResult:NO message:@"无法获取当前视图" callback:callback];
                 return;
             }
             [self logMessage:[NSString stringWithFormat:@"步骤8: 当前视图: %@", NSStringFromClass([topVC class])] callback:callback];
@@ -342,17 +380,13 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 dispatch_async(dispatch_get_main_queue(), ^{ 
                     [self logMessage:@"步骤11: 会话已启动" callback:callback];
                     [self logMessage:@"✅ 双摄预览已开启！" callback:callback];
-                    if (callback) {
-                        callback(@{@"success": @YES, @"msg": @"双摄预览已开启"}, NO);
-                    }
+                    [self sendResult:YES message:@"双摄预览已开启" callback:callback];
                 });
             });
             
         } @catch (NSException *exception) {
             [self logMessage:[NSString stringWithFormat:@"设置双摄时崩溃: %@", exception.reason] callback:callback];
-            if (callback) {
-                callback(@{@"success": @NO, @"msg": exception.reason}, NO);
-            }
+            [self sendResult:NO message:exception.reason callback:callback];
         }
     });
 }
