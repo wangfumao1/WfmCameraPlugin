@@ -21,10 +21,9 @@ else
     exit 1
 fi
 
-# 检查头文件是否存在（路径修正）
+# 检查头文件是否存在
 if [ ! -f "inc/DCUni/DCUniModule.h" ]; then
     echo "❌ 找不到 inc/DCUni/DCUniModule.h"
-    echo "inc 目录内容："
     ls -la inc/
     exit 1
 fi
@@ -34,23 +33,29 @@ echo "✅ 找到 DCUniModule.h"
 IPHONE_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 echo "iOS SDK: $IPHONE_SDK"
 
-# 编译（添加正确的头文件搜索路径）
+# 编译 Objective-C 代码（修复空格问题）
 echo "🔨 编译 Objective-C 代码..."
 clang -arch arm64 \
     -isysroot "$IPHONE_SDK" \
-    -I ./inc/DCUni \           # DCUniModule.h 在这里
-    -I ./inc/weexHeader \       # 可能需要的其他头文件
-    -I ./inc \                  # 根目录头文件
+    -I "./inc/DCUni" \
+    -I "./inc/weexHeader" \
+    -I "./inc" \
     -fobjc-arc \
-    -c Sources/WfmCameraPlugin.m \
+    -c "./Sources/WfmCameraPlugin.m" \
     -o "$OUTPUT_DIR/WfmCameraPlugin.o"
+
+# 检查编译是否成功
+if [ $? -ne 0 ]; then
+    echo "❌ 编译失败"
+    exit 1
+fi
 
 # 创建静态库
 echo "📚 创建静态库..."
 ar rcs "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUTPUT_DIR/WfmCameraPlugin.o"
 
 # 复制头文件
-cp Sources/WfmCameraPlugin.h "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Headers/"
+cp "./Sources/WfmCameraPlugin.h" "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Headers/"
 
 # 创建 Info.plist
 echo "📝 创建 Info.plist..."
