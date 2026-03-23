@@ -49,6 +49,9 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
 - (void)logMessage:(NSString *)message callback:(UniModuleKeepAliveCallback)callback {
     NSLog(@"[WfmCameraPlugin] %@", message);
+    if (!self.logs) {
+        self.logs = [NSMutableArray array];
+    }
     [self.logs addObject:message];
 }
 
@@ -66,13 +69,15 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         if (message) {
             result[@"msg"] = message;
         }
-        if (self.logs.count > 0) {
+        if (self.logs && self.logs.count > 0) {
             result[@"logs"] = self.logs;
         }
         callback(result, NO);
     }
     // 清空日志
-    [self.logs removeAllObjects];
+    if (self.logs) {
+        [self.logs removeAllObjects];
+    }
 }
 
 // test 方法
