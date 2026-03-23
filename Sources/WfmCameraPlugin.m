@@ -147,7 +147,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             // 步骤1: 创建多摄会话
             [self addLog:@"步骤1: 创建多摄会话..."];
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
-            self.multiCamSession.sessionPreset = AVCaptureSessionPresetHigh;
+            self.multiCamSession.sessionPreset = AVCaptureSessionPresetPhoto;
             [self addLog:@"步骤1: ✅ 多摄会话创建成功"];
             
             // 步骤2: 获取后置摄像头
