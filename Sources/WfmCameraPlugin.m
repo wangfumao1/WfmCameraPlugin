@@ -18,6 +18,10 @@
 @property (nonatomic, strong) NSMutableArray *logs;
 @property (nonatomic, strong) UniModuleKeepAliveCallback currentCallback;
 
+// UI 控件
+@property (nonatomic, strong) UIButton *closeButton;
+@property (nonatomic, strong) UIButton *captureButton;
+
 @end
 
 @implementation WfmCameraPlugin
@@ -145,7 +149,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             // 步骤1: 创建多摄会话
             [self addLog:@"步骤1: 创建多摄会话..."];
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
-            // 注意：AVCaptureMultiCamSession 不支持设置 sessionPreset，使用默认值
             [self addLog:@"步骤1: ✅ 多摄会话创建成功"];
             
             // 步骤2: 获取后置摄像头
@@ -284,7 +287,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 步骤8: 获取当前视图（基于官方文档）
+            // 步骤8: 获取当前视图
             [self addLog:@"步骤8: 获取当前视图..."];
             UIViewController *topVC = [self getTopViewController];
             
@@ -295,7 +298,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             }
             [self addLog:[NSString stringWithFormat:@"步骤8: ✅ 当前视图: %@", NSStringFromClass([topVC class])]];
             
-            // 步骤9: 创建后置预览视图
+            // 步骤9: 创建后置预览视图（全屏）
             [self addLog:@"步骤9: 创建后置预览视图..."];
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
@@ -303,6 +306,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
+            // 后置摄像头：旋转90度（竖屏）
+            self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             [self.backPreviewView addSubview:self.backImageView];
             [self addLog:@"步骤9: ✅ 后置预览视图已创建"];
             
@@ -328,15 +333,52 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
+            // 前置摄像头：旋转90度 + 水平镜像（自拍效果）
+            self.frontImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
+            self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
             [self addLog:@"步骤10: ✅ 前置预览小窗已创建"];
             
-            // 步骤11: 启动会话
-            [self addLog:@"步骤11: 启动会话..."];
+            // 步骤11: 创建返回按钮（左上角）
+            [self addLog:@"步骤11: 创建返回按钮..."];
+            self.closeButton = [UIButton buttonWithType:UIButtonTypeCustom];
+            self.closeButton.frame = CGRectMake(20, 50, 44, 44);
+            self.closeButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
+            self.closeButton.layer.cornerRadius = 22;
+            self.closeButton.layer.masksToBounds = YES;
+            [self.closeButton setTitle:@"←" forState:UIControlStateNormal];
+            self.closeButton.titleLabel.font = [UIFont systemFontOfSize:28 weight:UIFontWeightMedium];
+            [self.closeButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+            [self.closeButton addTarget:self action:@selector(closeButtonTapped) forControlEvents:UIControlEventTouchUpInside];
+            [topVC.view addSubview:self.closeButton];
+            [self addLog:@"步骤11: ✅ 返回按钮已创建"];
+            
+            // 步骤12: 创建圆形拍照按钮（底部中间）
+            [self addLog:@"步骤12: 创建拍照按钮..."];
+            self.captureButton = [UIButton buttonWithType:UIButtonTypeCustom];
+            CGFloat buttonSize = 70;
+            self.captureButton.frame = CGRectMake(
+                (topVC.view.bounds.size.width - buttonSize) / 2,
+                topVC.view.bounds.size.height - buttonSize - 40,
+                buttonSize,
+                buttonSize
+            );
+            self.captureButton.backgroundColor = [UIColor whiteColor];
+            self.captureButton.layer.cornerRadius = buttonSize / 2;
+            self.captureButton.layer.masksToBounds = YES;
+            self.captureButton.layer.borderWidth = 3;
+            self.captureButton.layer.borderColor = [UIColor whiteColor].CGColor;
+            self.captureButton.backgroundColor = [UIColor colorWithWhite:1 alpha:0.3];
+            [self.captureButton addTarget:self action:@selector(captureButtonTapped) forControlEvents:UIControlEventTouchUpInside];
+            [topVC.view addSubview:self.captureButton];
+            [self addLog:@"步骤12: ✅ 拍照按钮已创建"];
+            
+            // 步骤13: 启动会话
+            [self addLog:@"步骤13: 启动会话..."];
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
                 [self.multiCamSession startRunning];
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [self addLog:@"步骤11: ✅ 会话已启动"];
+                    [self addLog:@"步骤13: ✅ 会话已启动"];
                     [self addLog:@"🎉 ========== 双摄预览已开启！ =========="];
                     [self sendResult:YES message:@"双摄预览已开启" callback:self.currentCallback];
                 });
@@ -347,6 +389,23 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self sendResult:NO message:exception.reason callback:self.currentCallback];
         }
     });
+}
+
+// 返回按钮点击事件
+- (void)closeButtonTapped {
+    [self addLog:@"返回按钮点击，关闭双摄"];
+    [self closeDualCamera:@{} callback:^(NSDictionary *result, BOOL keepAlive) {
+        [self addLog:@"双摄已关闭"];
+    }];
+}
+
+// 拍照按钮点击事件
+- (void)captureButtonTapped {
+    [self addLog:@"拍照按钮点击"];
+    // TODO: 实现拍照功能
+    if (self.currentCallback) {
+        self.currentCallback(@{@"success": @YES, @"msg": @"拍照功能开发中"}, NO);
+    }
 }
 
 // 关闭双摄
@@ -375,6 +434,16 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self.frontPreviewView removeFromSuperview];
                 self.frontPreviewView = nil;
                 [self addLog:@"前置预览视图已移除"];
+            }
+            if (self.closeButton) {
+                [self.closeButton removeFromSuperview];
+                self.closeButton = nil;
+                [self addLog:@"返回按钮已移除"];
+            }
+            if (self.captureButton) {
+                [self.captureButton removeFromSuperview];
+                self.captureButton = nil;
+                [self addLog:@"拍照按钮已移除"];
             }
             
             self.multiCamSession = nil;
@@ -446,33 +515,26 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return image;
 }
 
-#pragma mark - 获取当前视图控制器（基于官方文档）
+#pragma mark - 获取当前视图控制器
 
-// 获取当前显示的 UIViewController
 - (UIViewController *)getTopViewController {
-    // 获得当前活动窗口的根视图
     UIViewController *vc = [UIApplication sharedApplication].keyWindow.rootViewController;
     UIViewController *currentShowingVC = [self findCurrentShowingViewControllerFrom:vc];
     return currentShowingVC;
 }
 
 - (UIViewController *)findCurrentShowingViewControllerFrom:(UIViewController *)vc {
-    // 递归方法 Recursive method
     UIViewController *currentShowingVC;
     if ([vc presentedViewController]) {
-        // 当前视图是被presented出来的
         UIViewController *nextRootVC = [vc presentedViewController];
         currentShowingVC = [self findCurrentShowingViewControllerFrom:nextRootVC];
     } else if ([vc isKindOfClass:[UITabBarController class]]) {
-        // 根视图为UITabBarController
         UIViewController *nextRootVC = [(UITabBarController *)vc selectedViewController];
         currentShowingVC = [self findCurrentShowingViewControllerFrom:nextRootVC];
     } else if ([vc isKindOfClass:[UINavigationController class]]) {
-        // 根视图为UINavigationController
         UIViewController *nextRootVC = [(UINavigationController *)vc visibleViewController];
         currentShowingVC = [self findCurrentShowingViewControllerFrom:nextRootVC];
     } else {
-        // 根视图为非导航类
         currentShowingVC = vc;
     }
     return currentShowingVC;
