@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-set -x  # 显示执行过程，方便调试
+set -x
 
 FRAMEWORK_NAME="WfmCameraPlugin"
 OUTPUT_DIR="build"
@@ -17,13 +17,14 @@ if [ -f "inc.zip" ]; then
     unzip -o inc.zip
     echo "✅ inc.zip 解压完成"
 else
-    echo "❌ 找不到 inc.zip，请确保已上传"
+    echo "❌ 找不到 inc.zip"
     exit 1
 fi
 
-# 检查头文件是否存在
-if [ ! -f "inc/DCUniModule.h" ]; then
-    echo "❌ 找不到 inc/DCUniModule.h"
+# 检查头文件是否存在（路径修正）
+if [ ! -f "inc/DCUni/DCUniModule.h" ]; then
+    echo "❌ 找不到 inc/DCUni/DCUniModule.h"
+    echo "inc 目录内容："
     ls -la inc/
     exit 1
 fi
@@ -33,11 +34,13 @@ echo "✅ 找到 DCUniModule.h"
 IPHONE_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 echo "iOS SDK: $IPHONE_SDK"
 
-# 编译
+# 编译（添加正确的头文件搜索路径）
 echo "🔨 编译 Objective-C 代码..."
 clang -arch arm64 \
     -isysroot "$IPHONE_SDK" \
-    -I ./inc \
+    -I ./inc/DCUni \           # DCUniModule.h 在这里
+    -I ./inc/weexHeader \       # 可能需要的其他头文件
+    -I ./inc \                  # 根目录头文件
     -fobjc-arc \
     -c Sources/WfmCameraPlugin.m \
     -o "$OUTPUT_DIR/WfmCameraPlugin.o"
@@ -80,15 +83,6 @@ EOF
 
 # 转换为二进制格式
 plutil -convert binary1 "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Info.plist"
-
-# 创建 module.modulemap（如果需要）
-mkdir -p "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Modules"
-cat > "$OUTPUT_DIR/$FRAMEWORK_NAME.framework/Modules/module.modulemap" <<EOF
-framework module $FRAMEWORK_NAME {
-    header "$FRAMEWORK_NAME-Swift.h"
-    export *
-}
-EOF
 
 # 打包
 cd "$OUTPUT_DIR"
