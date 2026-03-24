@@ -260,6 +260,29 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self sendResult:NO message:@"找不到后置摄像头" callback:self.currentCallback];
                 return;
             }
+
+            // ✅ 添加白平衡配置
+            NSError *configError = nil;
+            if ([backCamera lockForConfiguration:&configError]) {
+                // 白平衡
+                if ([backCamera isWhiteBalanceModeSupported:AVCaptureWhiteBalanceModeContinuousAutoWhiteBalance]) {
+                    backCamera.whiteBalanceMode = AVCaptureWhiteBalanceModeContinuousAutoWhiteBalance;
+                    [self addLog:@"✅ 后置摄像头白平衡: 连续自动"];
+                } else if ([backCamera isWhiteBalanceModeSupported:AVCaptureWhiteBalanceModeAutoWhiteBalance]) {
+                    backCamera.whiteBalanceMode = AVCaptureWhiteBalanceModeAutoWhiteBalance;
+                    [self addLog:@"✅ 后置摄像头白平衡: 自动"];
+                }
+                
+                // 曝光（可选）
+                if ([backCamera isExposureModeSupported:AVCaptureExposureModeContinuousAutoExposure]) {
+                    backCamera.exposureMode = AVCaptureExposureModeContinuousAutoExposure;
+                    [self addLog:@"✅ 后置摄像头曝光: 连续自动"];
+                }
+                
+                [backCamera unlockForConfiguration];
+            } else {
+                [self addLog:[NSString stringWithFormat:@"⚠️ 无法配置后置摄像头: %@", configError.localizedDescription]];
+            }
             
             [self configureBestFormatForDevice:backCamera];
             
@@ -381,22 +404,23 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
 
-            // 容器视图
-            UIView *containerView = [[UIView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
-            containerView.backgroundColor = [UIColor clearColor];
-            containerView.clipsToBounds = YES;  // 裁剪超出部分
-            [self.backPreviewView addSubview:containerView];
-
-            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, fitWidth, fitHeight)];
-            // ✅ 改为 ScaleAspectFit，完整显示画面，不裁剪
+            // 直接添加 ImageView，不包容器
+            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFit;
             self.backImageView.backgroundColor = [UIColor clearColor];
             // 旋转90度
             self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
-            // 旋转后交换宽高
-            self.backImageView.frame = CGRectMake(0, 0, fitHeight, fitWidth);
-            self.backImageView.center = CGPointMake(fitWidth / 2, fitHeight / 2);
-            [containerView addSubview:self.backImageView];
+            // 旋转后，ImageView 的实际尺寸是 (fitHeight, fitWidth)
+            // 重新计算位置，使其在目标区域内居中
+            CGFloat rotatedWidth = fitHeight;
+            CGFloat rotatedHeight = fitWidth;
+            CGFloat rotatedX = fitX + (fitWidth - rotatedWidth) / 2;
+            CGFloat rotatedY = fitY + (fitHeight - rotatedHeight) / 2;
+            self.backImageView.frame = CGRectMake(rotatedX, rotatedY, rotatedWidth, rotatedHeight);
+            [self.backPreviewView addSubview:self.backImageView];
+
+            [self addLog:[NSString stringWithFormat:@"目标区域: (%.0f,%.0f,%.0f,%.0f)", fitX, fitY, fitWidth, fitHeight]];
+            [self addLog:[NSString stringWithFormat:@"旋转后ImageView: (%.0f,%.0f,%.0f,%.0f)", rotatedX, rotatedY, rotatedWidth, rotatedHeight]];
             [self addLog:@"✅ 后置预览视图已创建"];
             
             // 前置小窗 - 同样不旋转
