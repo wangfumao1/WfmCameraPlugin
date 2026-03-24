@@ -139,15 +139,18 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             NSString *fileName = [NSString stringWithFormat:@"photo_%.0f.jpg", [[NSDate date] timeIntervalSince1970]];
             NSString *filePath = [documentsPath stringByAppendingPathComponent:fileName];
             
-            // 压缩图片质量到 0.7，保证文件大小
-            NSData *imageData = UIImageJPEGRepresentation(image, 0.7);
-            // 如果仍然太大，继续压缩
-            while (imageData.length > 1024 * 1024 && imageData.length > 0) {
-                static CGFloat compression = 0.65;
+            // ✅ 1. 压缩分辨率，最大边 1080
+            UIImage *resizedImage = [self resizeImage:image maxSize:1080];
+            
+            // ✅ 2. 压缩质量
+            NSData *imageData = UIImageJPEGRepresentation(resizedImage, 0.7);
+            // 如果仍然大于 1M，继续压缩
+            CGFloat compression = 0.6;
+            while (imageData.length > 1024 * 1024 && compression > 0.1) {
+                imageData = UIImageJPEGRepresentation(resizedImage, compression);
                 compression -= 0.05;
-                if (compression < 0.1) break;
-                imageData = UIImageJPEGRepresentation(image, compression);
             }
+            
             [imageData writeToFile:filePath atomically:YES];
             
             if (completion) {
@@ -431,12 +434,17 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.backPreviewView addSubview:self.backImageView];
             [self addLog:@"✅ 后置预览视图已创建"];
             
-            // ========== 7. 前置预览小窗 ==========
+            // 前置小窗 - 竖屏比例
             CGFloat smallWidth = 120;
+            // 画面已经是竖屏，比例 = 高度/宽度 > 1，所以高度 = 宽度 × 比例
             CGFloat smallHeight = smallWidth * videoAspectRatio;
             CGFloat margin = 16;
             CGFloat topOffset = 100;
-            
+
+            [self addLog:@"========== 前置小窗计算 =========="];
+            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
+            [self addLog:[NSString stringWithFormat:@"小窗尺寸: %.0f x %.0f", smallWidth, smallHeight]];
+
             self.frontPreviewView = [[UIView alloc] initWithFrame:CGRectMake(
                 topVC.view.bounds.size.width - smallWidth - margin,
                 topOffset,
@@ -449,7 +457,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontPreviewView.layer.borderWidth = 2;
             self.frontPreviewView.layer.borderColor = [UIColor whiteColor].CGColor;
             [topVC.view addSubview:self.frontPreviewView];
-            
+
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.frontImageView.backgroundColor = [UIColor clearColor];
@@ -808,16 +816,17 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 - (UIImage *)addWatermarkToImage:(UIImage *)image {
     CGSize imageSize = image.size;
     
-    // 动态计算字体大小（基于图片宽度）
-    CGFloat fontSize = 14.0;
-    if (imageSize.width > 2000) fontSize = 18.0;
-    else if (imageSize.width > 1000) fontSize = 16.0;
-    else fontSize = 14.0;
+    // ✅ 水印宽度 = 图片宽度的 1/4
+    CGFloat watermarkWidth = imageSize.width / 4;
     
-    CGFloat padding = 10.0;
-    CGFloat spacing = 4.0;
-    CGFloat margin = 16.0;
-    CGFloat cornerRadius = 6.0;
+    // 动态计算字体大小（基于水印宽度）
+    CGFloat fontSize = watermarkWidth / 8.0;  // 大约 1/8 的宽度
+    fontSize = MAX(12.0, MIN(24.0, fontSize));
+    
+    CGFloat padding = watermarkWidth / 12.0;   // 内边距
+    CGFloat spacing = watermarkWidth / 30.0;   // 行间距
+    CGFloat margin = watermarkWidth / 10.0;    // 外边距
+    CGFloat cornerRadius = watermarkWidth / 20.0;  // 圆角
     
     NSArray *texts = [self getWatermarkTexts];
     NSArray *colors = [self getWatermarkColors];
@@ -840,8 +849,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     }
     totalTextHeight += spacing * (texts.count - 1);
     
-    // 背景尺寸
-    CGFloat bgWidth = maxTextWidth + padding * 2;
+    // 背景宽度 = 最大文本宽度 + 左右内边距，但不能超过水印最大宽度
+    CGFloat bgWidth = MIN(maxTextWidth + padding * 2, watermarkWidth);
     CGFloat bgHeight = totalTextHeight + padding * 2;
     
     // 左下角位置
@@ -855,7 +864,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     // 1. 绘制原图
     [image drawInRect:CGRectMake(0, 0, imageSize.width, imageSize.height)];
     
-    // 2. 绘制半透明背景（黑色，alpha 0.5）
+    // 2. 绘制半透明背景
     UIBezierPath *bgPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(bgX, bgY, bgWidth, bgHeight)
                                                        cornerRadius:cornerRadius];
     [[UIColor colorWithWhite:0 alpha:0.5] setFill];
@@ -952,6 +961,33 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (self.colorSpace) {
         CGColorSpaceRelease(self.colorSpace);
     }
+}
+
+// 压缩图片到指定最大边长
+- (UIImage *)resizeImage:(UIImage *)image maxSize:(CGFloat)maxSize {
+    CGFloat width = image.size.width;
+    CGFloat height = image.size.height;
+    
+    if (width <= maxSize && height <= maxSize) {
+        return image;
+    }
+    
+    CGFloat scale;
+    if (width > height) {
+        scale = maxSize / width;
+    } else {
+        scale = maxSize / height;
+    }
+    
+    CGFloat newWidth = width * scale;
+    CGFloat newHeight = height * scale;
+    
+    UIGraphicsBeginImageContext(CGSizeMake(newWidth, newHeight));
+    [image drawInRect:CGRectMake(0, 0, newWidth, newHeight)];
+    UIImage *resizedImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    return resizedImage;
 }
 
 @end
