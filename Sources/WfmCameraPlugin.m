@@ -277,9 +277,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             CGSize backResolution = [self getCameraResolution:backCamera];
             [self addLog:[NSString stringWithFormat:@"摄像头原始分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
             
-            CGFloat displayAspectRatio = backResolution.height / backResolution.width;
-            [self addLog:[NSString stringWithFormat:@"竖屏显示比例: %.2f (高/宽)", displayAspectRatio]];
-            
             // 添加输入
             NSError *error = nil;
             self.backInput = [AVCaptureDeviceInput deviceInputWithDevice:backCamera error:&error];
@@ -379,28 +376,19 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
             [self addLog:[NSString stringWithFormat:@"显示区域: X=%.0f, Y=%.0f, W=%.0f, H=%.0f", fitX, fitY, fitWidth, fitHeight]];
 
-            // 后置预览
+            // 后置预览 - 不需要旋转，直接显示
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
 
-            // 容器视图
-            UIView *containerView = [[UIView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
-            containerView.backgroundColor = [UIColor clearColor];
-            [self.backPreviewView addSubview:containerView];
-
-            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, fitWidth, fitHeight)];
+            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor clearColor];
-            // 旋转90度
-            self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
-            // 旋转后交换宽高
-            self.backImageView.frame = CGRectMake(0, 0, fitHeight, fitWidth);
-            self.backImageView.center = CGPointMake(fitWidth / 2, fitHeight / 2);
-            [containerView addSubview:self.backImageView];
-            [self addLog:@"✅ 后置预览视图已创建"];
+            // ✅ 不旋转，直接显示
+            [self.backPreviewView addSubview:self.backImageView];
+            [self addLog:@"✅ 后置预览视图已创建（不旋转，直接填充）"];
             
-            // 前置小窗 - 强制竖屏比例
+            // 前置小窗 - 同样不旋转
             CGFloat smallWidth = 120;
             CGFloat smallHeight = smallWidth * aspectRatio;  // 保持画面比例
             CGFloat margin = 16;
@@ -425,9 +413,9 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
-            // 前置旋转90度 + 镜像
-            self.frontImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
-            self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
+            self.frontImageView.backgroundColor = [UIColor clearColor];
+            // ✅ 前置也需要镜像，但不旋转
+            self.frontImageView.transform = CGAffineTransformScale(CGAffineTransformIdentity, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
             [self addLog:@"✅ 前置预览小窗已创建"];
             
@@ -549,17 +537,16 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             if (self.isTakingPhoto) {
                 if (output == self.backOutput && self.waitingForBackPhoto) {
-                    // 后置照片：旋转90度 + 添加水印
+                    // 后置照片：需要旋转90度变成竖屏
                     UIImage *rotatedImage = [self rotateImage:image byDegrees:90];
                     UIImage *watermarkedImage = [self addWatermarkToImage:rotatedImage];
                     self.backImage = watermarkedImage;
                     self.waitingForBackPhoto = NO;
                     [self addLog:@"✅ 后置照片已捕获"];
                 } else if (output == self.frontOutput && self.waitingForFrontPhoto) {
-                    // 前置照片：旋转90度 + 镜像 + 旋转180度修正
+                    // 前置照片：旋转90度 + 镜像
                     UIImage *rotatedImage = [self rotateImage:image byDegrees:90];
                     rotatedImage = [self flipImageHorizontally:rotatedImage];
-                    rotatedImage = [self rotateImage:rotatedImage byDegrees:180];
                     UIImage *watermarkedImage = [self addWatermarkToImage:rotatedImage];
                     self.frontImage = watermarkedImage;
                     self.waitingForFrontPhoto = NO;
