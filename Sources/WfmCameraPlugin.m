@@ -225,7 +225,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                     dispatch_async(dispatch_get_main_queue(), ^{
                         if (granted) {
                             [self addLog:@"✅ 权限已授权"];
-                            [self setupDualCamera];
+                            // ✅ 授权后延迟一点再设置，确保视图已准备好
+                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                                [self setupDualCamera];
+                            });
                         } else {
                             [self addLog:@"❌ 用户拒绝相机权限"];
                             [self sendResult:NO message:@"需要相机权限" callback:callback];
@@ -311,6 +314,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             CGSize backResolution = [self getCameraResolution:backCamera];
             [self addLog:[NSString stringWithFormat:@"摄像头分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
             
+            // 画面已经是竖屏，比例 = 高度/宽度
+            CGFloat videoAspectRatio = backResolution.height / backResolution.width;
+            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
+            
             // ========== 3. 添加输入 ==========
             NSError *error = nil;
             self.backInput = [AVCaptureDeviceInput deviceInputWithDevice:backCamera error:&error];
@@ -342,7 +349,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 if (self.backInput.ports.count > 0) {
                     AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
                     if (backConnection) {
-                        // ✅ 设置后置视频方向为竖屏
+                        // 设置后置视频方向为竖屏
                         if ([backConnection isVideoOrientationSupported]) {
                             backConnection.videoOrientation = AVCaptureVideoOrientationPortrait;
                             [self addLog:@"✅ 后置视频方向设置为竖屏"];
@@ -365,12 +372,12 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 if (self.frontInput.ports.count > 0) {
                     AVCaptureConnection *frontConnection = [AVCaptureConnection connectionWithInputPorts:self.frontInput.ports output:self.frontOutput];
                     if (frontConnection) {
-                        // ✅ 设置前置视频方向为竖屏
+                        // 设置前置视频方向为竖屏
                         if ([frontConnection isVideoOrientationSupported]) {
                             frontConnection.videoOrientation = AVCaptureVideoOrientationPortrait;
                             [self addLog:@"✅ 前置视频方向设置为竖屏"];
                         }
-                        // ✅ 前置摄像头镜像
+                        // 前置摄像头镜像
                         if (frontConnection.isVideoMirroringSupported) {
                             frontConnection.videoMirrored = YES;
                             [self addLog:@"✅ 前置摄像头镜像已开启"];
@@ -391,60 +398,29 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            CGFloat viewWidth = topVC.view.bounds.size.width;
-            CGFloat viewHeight = topVC.view.bounds.size.height;
-            
-            // 画面已经是竖屏，比例 = 高度/宽度（>1）
-            CGFloat videoAspectRatio = backResolution.height / backResolution.width;
-            CGFloat screenAspectRatio = viewHeight / viewWidth;
-            
-            [self addLog:@"========== 预览计算 =========="];
-            [self addLog:[NSString stringWithFormat:@"屏幕尺寸: %.0f x %.0f", viewWidth, viewHeight]];
-            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
-            [self addLog:[NSString stringWithFormat:@"屏幕比例(高/宽): %.3f", screenAspectRatio]];
-            
-            CGFloat fitWidth, fitHeight;
-            
-            if (videoAspectRatio > screenAspectRatio) {
-                // 画面更瘦高，按高度铺满，宽度居中（左右黑边）
-                fitHeight = viewHeight;
-                fitWidth = fitHeight / videoAspectRatio;
-                [self addLog:@"分支: 按高度铺满，宽度居中"];
-            } else {
-                // 画面更矮宽，按宽度铺满，高度居中（上下黑边）
-                fitWidth = viewWidth;
-                fitHeight = fitWidth * videoAspectRatio;
-                [self addLog:@"分支: 按宽度铺满，高度居中"];
-            }
-            
-            CGFloat fitX = (viewWidth - fitWidth) / 2;
-            CGFloat fitY = (viewHeight - fitHeight) / 2;
-            
-            [self addLog:[NSString stringWithFormat:@"显示区域: X=%.0f, Y=%.0f, W=%.0f, H=%.0f", fitX, fitY, fitWidth, fitHeight]];
-            
             // ========== 6. 后置预览视图 ==========
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
             
-            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
-            self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
+            self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
+            self.backImageView.contentMode = UIViewContentModeScaleAspectFit;
             self.backImageView.backgroundColor = [UIColor clearColor];
-            // ✅ 画面已经是竖屏，不需要任何旋转
+            // 画面已经是竖屏，不需要任何旋转
             [self.backPreviewView addSubview:self.backImageView];
             [self addLog:@"✅ 后置预览视图已创建"];
             
-            // 前置小窗 - 竖屏比例
+            // ========== 7. 前置预览小窗 ==========
+            // 小窗固定宽度120，高度按画面比例自适应
             CGFloat smallWidth = 120;
-            // 画面已经是竖屏，比例 = 高度/宽度 > 1，所以高度 = 宽度 × 比例
             CGFloat smallHeight = smallWidth * videoAspectRatio;
             CGFloat margin = 16;
             CGFloat topOffset = 100;
-
+            
             [self addLog:@"========== 前置小窗计算 =========="];
             [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
             [self addLog:[NSString stringWithFormat:@"小窗尺寸: %.0f x %.0f", smallWidth, smallHeight]];
-
+            
             self.frontPreviewView = [[UIView alloc] initWithFrame:CGRectMake(
                 topVC.view.bounds.size.width - smallWidth - margin,
                 topOffset,
@@ -457,11 +433,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontPreviewView.layer.borderWidth = 2;
             self.frontPreviewView.layer.borderColor = [UIColor whiteColor].CGColor;
             [topVC.view addSubview:self.frontPreviewView];
-
+            
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.frontImageView.backgroundColor = [UIColor clearColor];
-            // ✅ 前置只需要镜像，不需要旋转
+            // 前置只需要镜像
             self.frontImageView.transform = CGAffineTransformScale(CGAffineTransformIdentity, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
             [self addLog:@"✅ 前置预览小窗已创建"];
