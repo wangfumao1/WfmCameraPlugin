@@ -310,14 +310,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             [self configureBestFormatForDevice:frontCamera];
             
-            // 获取摄像头分辨率
-            CGSize backResolution = [self getCameraResolution:backCamera];
-            [self addLog:[NSString stringWithFormat:@"摄像头分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
-            
-            // 画面已经是竖屏，比例 = 高度/宽度
-            CGFloat videoAspectRatio = backResolution.height / backResolution.width;
-            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
-            
             // ========== 3. 添加输入 ==========
             NSError *error = nil;
             self.backInput = [AVCaptureDeviceInput deviceInputWithDevice:backCamera error:&error];
@@ -389,6 +381,14 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                     }
                 }
             }
+
+            // 获取摄像头分辨率
+            CGSize backResolution = [self getCameraResolution:backCamera];
+            [self addLog:[NSString stringWithFormat:@"摄像头分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
+            
+            // 画面已经是竖屏，比例 = 高度/宽度
+            CGFloat videoAspectRatio = backResolution.height / backResolution.width;
+            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
             
             // ========== 5. 获取当前视图 ==========
             UIViewController *topVC = [self getTopViewController];
