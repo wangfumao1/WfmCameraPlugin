@@ -406,17 +406,37 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // ========== 6. 后置预览视图 ==========
+            // ========== 后置预览视图 ==========
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
-            
-            self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
-            self.backImageView.contentMode = UIViewContentModeTop;
+
+            CGFloat viewWidth = topVC.view.bounds.size.width;
+            CGFloat viewHeight = topVC.view.bounds.size.height;
+
+            // 强制竖屏比例
+            CGFloat imageWidth, imageHeight;
+            if (videoAspectRatio > viewHeight / viewWidth) {
+                // 画面更瘦高，按高度铺满
+                imageHeight = viewHeight;
+                imageWidth = imageHeight / videoAspectRatio;
+            } else {
+                // 画面更矮宽，按宽度铺满
+                imageWidth = viewWidth;
+                imageHeight = imageWidth * videoAspectRatio;
+            }
+
+            // ✅ 顶部对齐：Y = 0，左右居中
+            CGFloat imageX = (viewWidth - imageWidth) / 2;
+            CGFloat imageY = 0;
+
+            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(imageX, imageY, imageWidth, imageHeight)];
+            self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor clearColor];
-            // 画面已经是竖屏，不需要任何旋转
             [self.backPreviewView addSubview:self.backImageView];
-            [self addLog:@"✅ 后置预览视图已创建"];
+
+            [self addLog:[NSString stringWithFormat:@"后置预览: 位置(%.0f,%.0f) 尺寸(%.0f,%.0f)", imageX, imageY, imageWidth, imageHeight]];
+            [self addLog:@"✅ 后置预览视图已创建（顶部对齐）"];
             
             // ========== 7. 前置预览小窗 ==========
             // 小窗固定宽度120，高度按画面比例自适应
