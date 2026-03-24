@@ -376,17 +376,28 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
             [self addLog:[NSString stringWithFormat:@"显示区域: X=%.0f, Y=%.0f, W=%.0f, H=%.0f", fitX, fitY, fitWidth, fitHeight]];
 
-            // 后置预览 - 不需要旋转，直接显示
+            // 后置预览
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
 
-            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
-            self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
+            // 容器视图
+            UIView *containerView = [[UIView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
+            containerView.backgroundColor = [UIColor clearColor];
+            containerView.clipsToBounds = YES;  // 裁剪超出部分
+            [self.backPreviewView addSubview:containerView];
+
+            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, fitWidth, fitHeight)];
+            // ✅ 改为 ScaleAspectFit，完整显示画面，不裁剪
+            self.backImageView.contentMode = UIViewContentModeScaleAspectFit;
             self.backImageView.backgroundColor = [UIColor clearColor];
-            // ✅ 不旋转，直接显示
-            [self.backPreviewView addSubview:self.backImageView];
-            [self addLog:@"✅ 后置预览视图已创建（不旋转，直接填充）"];
+            // 旋转90度
+            self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
+            // 旋转后交换宽高
+            self.backImageView.frame = CGRectMake(0, 0, fitHeight, fitWidth);
+            self.backImageView.center = CGPointMake(fitWidth / 2, fitHeight / 2);
+            [containerView addSubview:self.backImageView];
+            [self addLog:@"✅ 后置预览视图已创建"];
             
             // 前置小窗 - 同样不旋转
             CGFloat smallWidth = 120;
@@ -412,10 +423,12 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [topVC.view addSubview:self.frontPreviewView];
 
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
-            self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
+            // ✅ 改为 ScaleAspectFit
+            self.frontImageView.contentMode = UIViewContentModeScaleAspectFit;
             self.frontImageView.backgroundColor = [UIColor clearColor];
-            // ✅ 前置也需要镜像，但不旋转
-            self.frontImageView.transform = CGAffineTransformScale(CGAffineTransformIdentity, -1, 1);
+            // 前置旋转90度 + 镜像
+            self.frontImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
+            self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
             [self addLog:@"✅ 前置预览小窗已创建"];
             
