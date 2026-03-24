@@ -371,8 +371,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self addLog:[NSString stringWithFormat:@"分支: 按宽度铺满，高度居中"]];
             }
 
-            CGFloat fitX = (viewWidth - fitWidth) / 2;
-            CGFloat fitY = (viewHeight - fitHeight) / 2;
+            CGFloat fitX = 0;
+            CGFloat fitY = 0;
 
             [self addLog:[NSString stringWithFormat:@"显示区域: X=%.0f, Y=%.0f, W=%.0f, H=%.0f", fitX, fitY, fitWidth, fitHeight]];
 
