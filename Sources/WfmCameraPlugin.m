@@ -39,7 +39,6 @@
 // 摄像头格式相关方法
 - (AVCaptureDeviceFormat *)bestFormatForDevice:(AVCaptureDevice *)device;
 - (BOOL)configureBestFormatForDevice:(AVCaptureDevice *)device;
-- (void)configureWhiteBalance:(AVCaptureDevice *)device;
 
 @end
 
@@ -140,17 +139,15 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             NSString *fileName = [NSString stringWithFormat:@"photo_%.0f.jpg", [[NSDate date] timeIntervalSince1970]];
             NSString *filePath = [documentsPath stringByAppendingPathComponent:fileName];
             
-            // 压缩图片质量到 0.7，保证文件大小在 1M 以内
+            // 压缩图片质量到 0.7，保证文件大小
             NSData *imageData = UIImageJPEGRepresentation(image, 0.7);
-            
-            // 如果仍然大于 1M，继续压缩
+            // 如果仍然太大，继续压缩
             while (imageData.length > 1024 * 1024 && imageData.length > 0) {
                 static CGFloat compression = 0.65;
                 compression -= 0.05;
                 if (compression < 0.1) break;
                 imageData = UIImageJPEGRepresentation(image, compression);
             }
-            
             [imageData writeToFile:filePath atomically:YES];
             
             if (completion) {
@@ -180,73 +177,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self addLog:@"测试第三条日志"];
     [self addLog:@"========== test 方法结束 =========="];
     [self sendResult:YES message:@"插件工作正常！" callback:callback];
-}
-
-#pragma mark - 摄像头格式配置
-
-- (AVCaptureDeviceFormat *)bestFormatForDevice:(AVCaptureDevice *)device {
-    if (!device) return nil;
-    
-    AVCaptureDeviceFormat *bestFormat = nil;
-    int maxArea = 0;
-    
-    for (AVCaptureDeviceFormat *format in device.formats) {
-        CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-        int area = dims.width * dims.height;
-        
-        if (area > maxArea) {
-            maxArea = area;
-            bestFormat = format;
-        }
-    }
-    
-    return bestFormat;
-}
-
-- (BOOL)configureBestFormatForDevice:(AVCaptureDevice *)device {
-    if (!device) return NO;
-    
-    AVCaptureDeviceFormat *bestFormat = [self bestFormatForDevice:device];
-    if (!bestFormat) {
-        [self addLog:@"⚠️ 未找到合适的格式"];
-        return NO;
-    }
-    
-    NSError *error = nil;
-    if (![device lockForConfiguration:&error]) {
-        [self addLog:[NSString stringWithFormat:@"⚠️ 无法锁定摄像头: %@", error.localizedDescription]];
-        return NO;
-    }
-    
-    device.activeFormat = bestFormat;
-    CMTime frameDuration = CMTimeMake(1, 30);
-    device.activeVideoMinFrameDuration = frameDuration;
-    device.activeVideoMaxFrameDuration = frameDuration;
-    
-    CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(bestFormat.formatDescription);
-    [self addLog:[NSString stringWithFormat:@"✅ 设置摄像头格式: %dx%d", dims.width, dims.height]];
-    
-    [device unlockForConfiguration];
-    return YES;
-}
-
-- (void)configureWhiteBalance:(AVCaptureDevice *)device {
-    if (!device) return;
-    
-    NSError *error = nil;
-    if (![device lockForConfiguration:&error]) {
-        return;
-    }
-    
-    if ([device isWhiteBalanceModeSupported:AVCaptureWhiteBalanceModeContinuousAutoWhiteBalance]) {
-        device.whiteBalanceMode = AVCaptureWhiteBalanceModeContinuousAutoWhiteBalance;
-        [self addLog:@"✅ 设置白平衡模式: 连续自动白平衡"];
-    } else if ([device isWhiteBalanceModeSupported:AVCaptureWhiteBalanceModeAutoWhiteBalance]) {
-        device.whiteBalanceMode = AVCaptureWhiteBalanceModeAutoWhiteBalance;
-        [self addLog:@"✅ 设置白平衡模式: 自动白平衡"];
-    }
-    
-    [device unlockForConfiguration];
 }
 
 #pragma mark - 获取摄像头当前分辨率
@@ -332,7 +262,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             }
             
             [self configureBestFormatForDevice:backCamera];
-            [self configureWhiteBalance:backCamera];
             
             AVCaptureDevice *frontCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
                                                                                mediaType:AVMediaTypeVideo
@@ -344,10 +273,12 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             }
             
             [self configureBestFormatForDevice:frontCamera];
-            [self configureWhiteBalance:frontCamera];
             
             CGSize backResolution = [self getCameraResolution:backCamera];
             [self addLog:[NSString stringWithFormat:@"摄像头原始分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
+            
+            CGFloat displayAspectRatio = backResolution.height / backResolution.width;
+            [self addLog:[NSString stringWithFormat:@"竖屏显示比例: %.2f (高/宽)", displayAspectRatio]];
             
             // 添加输入
             NSError *error = nil;
@@ -413,23 +344,28 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // 计算 AspectFit 显示区域
+            // ========== 修改1: 后置预览改为 AspectFit ==========
             CGFloat viewWidth = topVC.view.bounds.size.width;
             CGFloat viewHeight = topVC.view.bounds.size.height;
-            CGFloat viewAspectRatio = viewWidth / viewHeight;
+            
+            // 获取摄像头画面比例（宽/高）
             CGFloat videoAspectRatio = backResolution.width / backResolution.height;
             
             CGFloat fitWidth, fitHeight;
-            if (videoAspectRatio > viewAspectRatio) {
+            if (videoAspectRatio > viewWidth / viewHeight) {
+                // 画面更宽，按宽度缩放，上下黑边
                 fitWidth = viewWidth;
                 fitHeight = fitWidth / videoAspectRatio;
             } else {
+                // 画面更高，按高度缩放，左右黑边
                 fitHeight = viewHeight;
                 fitWidth = fitHeight * videoAspectRatio;
             }
             
             CGFloat fitX = (viewWidth - fitWidth) / 2;
             CGFloat fitY = (viewHeight - fitHeight) / 2;
+            
+            [self addLog:[NSString stringWithFormat:@"AspectFit 显示区域: (%.0f,%.0f,%.0f,%.0f)", fitX, fitY, fitWidth, fitHeight]];
             
             // 后置预览
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
@@ -439,14 +375,16 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor clearColor];
+            // 旋转90度
             self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
+            // 旋转后交换宽高
             self.backImageView.frame = CGRectMake(fitX, fitY, fitHeight, fitWidth);
             [self.backPreviewView addSubview:self.backImageView];
             [self addLog:@"✅ 后置预览视图已创建（AspectFit效果）"];
             
-            // 前置小窗
+            // 前置小窗（保持不变）
             CGFloat smallWidth = 120;
-            CGFloat smallHeight = smallWidth / videoAspectRatio;
+            CGFloat smallHeight = smallWidth / displayAspectRatio;
             CGFloat margin = 16;
             CGFloat topOffset = 100;
             
@@ -588,21 +526,18 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             if (self.isTakingPhoto) {
                 if (output == self.backOutput && self.waitingForBackPhoto) {
+                    // 后置照片：旋转90度 + 添加水印
                     UIImage *rotatedImage = [self rotateImage:image byDegrees:90];
                     UIImage *watermarkedImage = [self addWatermarkToImage:rotatedImage];
                     self.backImage = watermarkedImage;
                     self.waitingForBackPhoto = NO;
                     [self addLog:@"✅ 后置照片已捕获"];
                 } else if (output == self.frontOutput && self.waitingForFrontPhoto) {
-                    UIImage *correctedImage = nil;
-                    if (image.imageOrientation == UIImageOrientationUp) {
-                        correctedImage = [UIImage imageWithCGImage:image.CGImage
-                                                              scale:image.scale
-                                                        orientation:UIImageOrientationLeftMirrored];
-                    } else {
-                        correctedImage = image;
-                    }
-                    UIImage *watermarkedImage = [self addWatermarkToImage:correctedImage];
+                    // 前置照片：旋转90度 + 镜像 + 旋转180度修正
+                    UIImage *rotatedImage = [self rotateImage:image byDegrees:90];
+                    rotatedImage = [self flipImageHorizontally:rotatedImage];
+                    rotatedImage = [self rotateImage:rotatedImage byDegrees:180];
+                    UIImage *watermarkedImage = [self addWatermarkToImage:rotatedImage];
                     self.frontImage = watermarkedImage;
                     self.waitingForFrontPhoto = NO;
                     [self addLog:@"✅ 前置照片已捕获"];
@@ -772,7 +707,19 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return rotatedImage;
 }
 
-#pragma mark - 水印（仿安卓样式：半透明底色、多行、不同颜色）
+- (UIImage *)flipImageHorizontally:(UIImage *)image {
+    UIGraphicsBeginImageContext(image.size);
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    CGContextTranslateCTM(context, image.size.width, 0);
+    CGContextScaleCTM(context, -1.0, 1.0);
+    [image drawInRect:CGRectMake(0, 0, image.size.width, image.size.height)];
+    UIImage *flippedImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    return flippedImage;
+}
+
+#pragma mark - 水印（仿安卓样式：半透明背景、多行、不同颜色、左下角）
 
 - (NSArray *)getWatermarkTexts {
     NSDate *now = [NSDate date];
@@ -800,69 +747,36 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
 - (NSArray *)getWatermarkColors {
     return @[
-        [UIColor whiteColor],                           // 拍摄时间 - 白色
+        [UIColor whiteColor],                                      // 拍摄时间 - 白色
         [UIColor colorWithRed:1.0 green:1.0 blue:0.0 alpha:1.0],  // 黄色 - 地点
-        [UIColor colorWithRed:0.0 green:1.0 blue:0.6 alpha:1.0],   // 嫩绿色 - 经纬度
-        [UIColor colorWithRed:0.0 green:1.0 blue:1.0 alpha:1.0],   // 青色 - 操作人
-        [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:1.0]    // 橙色 - 平台
+        [UIColor colorWithRed:0.0 green:1.0 blue:0.6 alpha:1.0],  // 嫩绿色 - 经纬度
+        [UIColor colorWithRed:0.0 green:1.0 blue:1.0 alpha:1.0],  // 青色 - 操作人
+        [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:1.0]   // 橙色 - 平台
     ];
-}
-
-- (CGFloat)getWatermarkFontSize:(CGSize)imageSize {
-    // 根据图片宽度动态计算字体大小（基准：图片宽度 1080 时字体 14pt）
-    CGFloat baseWidth = 1080.0;
-    CGFloat baseFontSize = 14.0;
-    CGFloat fontSize = (imageSize.width / baseWidth) * baseFontSize;
-    return MAX(10.0, MIN(18.0, fontSize));
-}
-
-- (CGFloat)getWatermarkPadding:(CGSize)imageSize {
-    CGFloat baseWidth = 1080.0;
-    CGFloat basePadding = 8.0;
-    CGFloat padding = (imageSize.width / baseWidth) * basePadding;
-    return MAX(6.0, MIN(12.0, padding));
-}
-
-- (CGFloat)getWatermarkSpacing:(CGSize)imageSize {
-    CGFloat baseWidth = 1080.0;
-    CGFloat baseSpacing = 4.0;
-    CGFloat spacing = (imageSize.width / baseWidth) * baseSpacing;
-    return MAX(2.0, MIN(6.0, spacing));
-}
-
-- (CGFloat)getWatermarkMargin:(CGSize)imageSize {
-    CGFloat baseWidth = 1080.0;
-    CGFloat baseMargin = 16.0;
-    CGFloat margin = (imageSize.width / baseWidth) * baseMargin;
-    return MAX(12.0, MIN(24.0, margin));
-}
-
-- (CGFloat)getWatermarkCornerRadius:(CGSize)imageSize {
-    CGFloat baseWidth = 1080.0;
-    CGFloat baseRadius = 6.0;
-    CGFloat radius = (imageSize.width / baseWidth) * baseRadius;
-    return MAX(4.0, MIN(8.0, radius));
 }
 
 - (UIImage *)addWatermarkToImage:(UIImage *)image {
     CGSize imageSize = image.size;
     
-    // 动态计算水印参数
-    CGFloat fontSize = [self getWatermarkFontSize:imageSize];
-    CGFloat padding = [self getWatermarkPadding:imageSize];
-    CGFloat spacing = [self getWatermarkSpacing:imageSize];
-    CGFloat margin = [self getWatermarkMargin:imageSize];
-    CGFloat cornerRadius = [self getWatermarkCornerRadius:imageSize];
+    // 动态计算字体大小（基于图片宽度）
+    CGFloat fontSize = 14.0;
+    if (imageSize.width > 2000) fontSize = 18.0;
+    else if (imageSize.width > 1000) fontSize = 16.0;
+    else fontSize = 14.0;
+    
+    CGFloat padding = 10.0;
+    CGFloat spacing = 4.0;
+    CGFloat margin = 16.0;
+    CGFloat cornerRadius = 6.0;
     
     NSArray *texts = [self getWatermarkTexts];
     NSArray *colors = [self getWatermarkColors];
-    
     UIFont *font = [UIFont systemFontOfSize:fontSize weight:UIFontWeightMedium];
     
     // 计算文本尺寸
     CGFloat maxTextWidth = 0;
     CGFloat totalTextHeight = 0;
-    NSMutableArray *textRects = [NSMutableArray array];
+    NSMutableArray *textHeights = [NSMutableArray array];
     
     for (NSString *text in texts) {
         NSDictionary *attrs = @{NSFontAttributeName: font};
@@ -872,7 +786,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                                          context:nil];
         maxTextWidth = MAX(maxTextWidth, rect.size.width);
         totalTextHeight += rect.size.height;
-        [textRects addObject:[NSValue valueWithCGRect:rect]];
+        [textHeights addObject:@(rect.size.height)];
     }
     totalTextHeight += spacing * (texts.count - 1);
     
@@ -891,15 +805,14 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     // 1. 绘制原图
     [image drawInRect:CGRectMake(0, 0, imageSize.width, imageSize.height)];
     
-    // 2. 绘制半透明背景（仿安卓：黑色半透明，alpha 130/255 ≈ 0.51）
-    CGContextSaveGState(context);
+    // 2. 绘制半透明背景（黑色，alpha 0.5）
     UIBezierPath *bgPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(bgX, bgY, bgWidth, bgHeight)
                                                        cornerRadius:cornerRadius];
-    [[UIColor colorWithWhite:0 alpha:0.51] setFill];
+    [[UIColor colorWithWhite:0 alpha:0.5] setFill];
     [bgPath fill];
     
     // 3. 绘制细边框
-    CGContextSetStrokeColorWithColor(context, [UIColor colorWithWhite:1 alpha:0.6].CGColor);
+    CGContextSetStrokeColorWithColor(context, [UIColor colorWithWhite:1 alpha:0.5].CGColor);
     CGContextSetLineWidth(context, 1.0);
     UIBezierPath *borderPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(bgX + 0.5, bgY + 0.5, bgWidth - 1, bgHeight - 1)
                                                           cornerRadius:cornerRadius - 0.5];
@@ -910,7 +823,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     for (NSInteger i = 0; i < texts.count; i++) {
         NSString *text = texts[i];
         UIColor *color = colors[i];
-        CGRect rect = [textRects[i] CGRectValue];
+        CGFloat textHeight = [textHeights[i] floatValue];
         
         NSDictionary *attrs = @{
             NSFontAttributeName: font,
@@ -918,16 +831,71 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         };
         
         CGFloat textX = bgX + padding;
-        CGFloat textY = currentY + (rect.size.height - rect.size.height) / 2;
+        CGFloat textY = currentY + (textHeight - textHeight) / 2;
         [text drawAtPoint:CGPointMake(textX, textY) withAttributes:attrs];
         
-        currentY += rect.size.height + spacing;
+        currentY += textHeight + spacing;
     }
     
     UIImage *watermarkedImage = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     
     return watermarkedImage;
+}
+
+#pragma mark - 摄像头格式配置
+
+- (AVCaptureDeviceFormat *)bestFormatForDevice:(AVCaptureDevice *)device {
+    if (!device) return nil;
+    
+    AVCaptureDeviceFormat *bestFormat = nil;
+    int maxArea = 0;
+    
+    for (AVCaptureDeviceFormat *format in device.formats) {
+        CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+        int area = dims.width * dims.height;
+        float aspectRatio = (float)dims.width / (float)dims.height;
+        BOOL isWideScreen = fabs(aspectRatio - 16.0/9.0) < 0.1;
+        
+        if (area > maxArea) {
+            if (isWideScreen) {
+                maxArea = area;
+                bestFormat = format;
+            } else if (!bestFormat) {
+                maxArea = area;
+                bestFormat = format;
+            }
+        }
+    }
+    
+    return bestFormat;
+}
+
+- (BOOL)configureBestFormatForDevice:(AVCaptureDevice *)device {
+    if (!device) return NO;
+    
+    AVCaptureDeviceFormat *bestFormat = [self bestFormatForDevice:device];
+    if (!bestFormat) {
+        [self addLog:@"⚠️ 未找到合适的格式"];
+        return NO;
+    }
+    
+    NSError *error = nil;
+    if (![device lockForConfiguration:&error]) {
+        [self addLog:[NSString stringWithFormat:@"⚠️ 无法锁定摄像头: %@", error.localizedDescription]];
+        return NO;
+    }
+    
+    device.activeFormat = bestFormat;
+    CMTime frameDuration = CMTimeMake(1, 30);
+    device.activeVideoMinFrameDuration = frameDuration;
+    device.activeVideoMaxFrameDuration = frameDuration;
+    
+    CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(bestFormat.formatDescription);
+    [self addLog:[NSString stringWithFormat:@"✅ 设置摄像头格式: %dx%d", dims.width, dims.height]];
+    
+    [device unlockForConfiguration];
+    return YES;
 }
 
 - (void)dealloc {
