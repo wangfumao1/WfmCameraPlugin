@@ -382,12 +382,20 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 }
             }
 
-            // 获取摄像头分辨率
+            // 获取摄像头原始分辨率
             CGSize backResolution = [self getCameraResolution:backCamera];
-            [self addLog:[NSString stringWithFormat:@"摄像头分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
-            
-            // 画面已经是竖屏，比例 = 高度/宽度
-            CGFloat videoAspectRatio = backResolution.height / backResolution.width;
+            [self addLog:[NSString stringWithFormat:@"摄像头原始分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
+
+            // ========== 强制竖屏比例计算 ==========
+            CGFloat width = backResolution.width;
+            CGFloat height = backResolution.height;
+
+            // 强制竖屏：大的作为高度，小的作为宽度
+            CGFloat displayHeight = MAX(width, height);
+            CGFloat displayWidth = MIN(width, height);
+            CGFloat videoAspectRatio = displayHeight / displayWidth;  // 竖屏比例，> 1
+
+            [self addLog:[NSString stringWithFormat:@"强制竖屏后尺寸: %.0f x %.0f", displayWidth, displayHeight]];
             [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
             
             // ========== 5. 获取当前视图 ==========
@@ -404,7 +412,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [topVC.view addSubview:self.backPreviewView];
             
             self.backImageView = [[UIImageView alloc] initWithFrame:self.backPreviewView.bounds];
-            self.backImageView.contentMode = UIViewContentModeScaleAspectFit;
+            self.backImageView.contentMode = UIViewContentModeTop;
             self.backImageView.backgroundColor = [UIColor clearColor];
             // 画面已经是竖屏，不需要任何旋转
             [self.backPreviewView addSubview:self.backImageView];
