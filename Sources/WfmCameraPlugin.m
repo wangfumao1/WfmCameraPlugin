@@ -344,77 +344,71 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // ========== 后置预览：至少一个方向铺满屏幕 ==========
+            // ========== 后置预览：强制竖屏显示 ==========
             CGFloat viewWidth = topVC.view.bounds.size.width;
             CGFloat viewHeight = topVC.view.bounds.size.height;
-
-            // 摄像头旋转后的竖屏比例 = 原始高度 / 原始宽度
-            CGFloat videoAspectRatio = backResolution.height / backResolution.width;
             CGFloat screenAspectRatio = viewHeight / viewWidth;
+
+            // 摄像头强制竖屏：大的作为高度，小的作为宽度
+            CGFloat displayHeight = MAX(backResolution.width, backResolution.height);
+            CGFloat displayWidth = MIN(backResolution.width, backResolution.height);
+            CGFloat aspectRatio = displayHeight / displayWidth;  // 竖屏比例
 
             [self addLog:@"========== 后置预览计算 =========="];
             [self addLog:[NSString stringWithFormat:@"屏幕尺寸: %.0f x %.0f", viewWidth, viewHeight]];
             [self addLog:[NSString stringWithFormat:@"屏幕比例(高/宽): %.3f", screenAspectRatio]];
-            [self addLog:[NSString stringWithFormat:@"摄像头原始分辨率: %.0f x %.0f", backResolution.width, backResolution.height]];
-            [self addLog:[NSString stringWithFormat:@"摄像头旋转后比例(高/宽): %.3f", videoAspectRatio]];
+            [self addLog:[NSString stringWithFormat:@"摄像头强制竖屏: %.0f x %.0f", displayWidth, displayHeight]];
+            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", aspectRatio]];
 
-            CGFloat targetWidth, targetHeight;  // 旋转前的目标尺寸
+            CGFloat fitWidth, fitHeight;
 
-            if (videoAspectRatio > screenAspectRatio) {
-                // 画面更瘦高，按高度铺满屏幕，宽度居中
-                targetHeight = viewHeight;
-                targetWidth = targetHeight / videoAspectRatio;
-                [self addLog:[NSString stringWithFormat:@"分支: 画面更瘦高 (%.3f > %.3f)", videoAspectRatio, screenAspectRatio]];
-                [self addLog:[NSString stringWithFormat:@"按高度铺满: targetHeight = %.0f, targetWidth = %.0f", targetHeight, targetWidth]];
+            if (aspectRatio > screenAspectRatio) {
+                // 画面更瘦高，按高度铺满，宽度居中（左右黑边）
+                fitHeight = viewHeight;
+                fitWidth = fitHeight / aspectRatio;
+                [self addLog:[NSString stringWithFormat:@"分支: 按高度铺满，宽度居中"]];
             } else {
-                // 画面更矮宽，按宽度铺满屏幕，高度居中
-                targetWidth = viewWidth;
-                targetHeight = targetWidth * videoAspectRatio;
-                [self addLog:[NSString stringWithFormat:@"分支: 画面更矮宽 (%.3f < %.3f)", videoAspectRatio, screenAspectRatio]];
-                [self addLog:[NSString stringWithFormat:@"按宽度铺满: targetWidth = %.0f, targetHeight = %.0f", targetWidth, targetHeight]];
+                // 画面更矮宽，按宽度铺满，高度居中（上下黑边）
+                fitWidth = viewWidth;
+                fitHeight = fitWidth * aspectRatio;
+                [self addLog:[NSString stringWithFormat:@"分支: 按宽度铺满，高度居中"]];
             }
 
-            CGFloat fitX = (viewWidth - targetWidth) / 2;
-            CGFloat fitY = (viewHeight - targetHeight) / 2;
+            CGFloat fitX = (viewWidth - fitWidth) / 2;
+            CGFloat fitY = (viewHeight - fitHeight) / 2;
 
-            [self addLog:[NSString stringWithFormat:@"计算后的目标区域(旋转前): X=%.0f, Y=%.0f, W=%.0f, H=%.0f", fitX, fitY, targetWidth, targetHeight]];
-            [self addLog:[NSString stringWithFormat:@"旋转后ImageView尺寸: W=%.0f, H=%.0f", targetHeight, targetWidth]];
+            [self addLog:[NSString stringWithFormat:@"显示区域: X=%.0f, Y=%.0f, W=%.0f, H=%.0f", fitX, fitY, fitWidth, fitHeight]];
 
             // 后置预览
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
 
-            // 创建一个容器视图来承载旋转后的图像
-            UIView *containerView = [[UIView alloc] initWithFrame:CGRectMake(fitX, fitY, targetWidth, targetHeight)];
+            // 容器视图
+            UIView *containerView = [[UIView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
             containerView.backgroundColor = [UIColor clearColor];
             [self.backPreviewView addSubview:containerView];
 
-            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, targetWidth, targetHeight)];
+            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, fitWidth, fitHeight)];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor clearColor];
             // 旋转90度
             self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
-            // 旋转后需要调整位置，使图像在容器中居中
-            self.backImageView.frame = CGRectMake(0, 0, targetHeight, targetWidth);
-            self.backImageView.center = CGPointMake(targetWidth / 2, targetHeight / 2);
+            // 旋转后交换宽高
+            self.backImageView.frame = CGRectMake(0, 0, fitHeight, fitWidth);
+            self.backImageView.center = CGPointMake(fitWidth / 2, fitHeight / 2);
             [containerView addSubview:self.backImageView];
-
-            [self addLog:[NSString stringWithFormat:@"容器位置: X=%.0f, Y=%.0f, W=%.0f, H=%.0f", fitX, fitY, targetWidth, targetHeight]];
-            [self addLog:[NSString stringWithFormat:@"ImageView中心点: (%.0f, %.0f)", targetWidth / 2, targetHeight / 2]];
-            [self addLog:@"✅ 后置预览视图已创建（至少一个方向铺满）"];
+            [self addLog:@"✅ 后置预览视图已创建"];
             
-            // 前置小窗 - 竖屏比例（宽 < 高）
+            // 前置小窗 - 强制竖屏比例
             CGFloat smallWidth = 120;
-            // 画面比例 = 高度/宽度，所以小窗高度 = 宽度 × 画面比例
-            CGFloat smallHeight = smallWidth * videoAspectRatio;
+            CGFloat smallHeight = smallWidth * aspectRatio;  // 保持画面比例
             CGFloat margin = 16;
             CGFloat topOffset = 100;
 
             [self addLog:@"========== 前置小窗计算 =========="];
-            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
+            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", aspectRatio]];
             [self addLog:[NSString stringWithFormat:@"小窗尺寸: %.0f x %.0f", smallWidth, smallHeight]];
-            [self addLog:[NSString stringWithFormat:@"小窗比例(高/宽): %.3f", smallHeight / smallWidth]];
 
             self.frontPreviewView = [[UIView alloc] initWithFrame:CGRectMake(
                 topVC.view.bounds.size.width - smallWidth - margin,
