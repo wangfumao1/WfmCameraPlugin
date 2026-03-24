@@ -30,6 +30,12 @@
 @property (nonatomic, assign) BOOL waitingForFrontPhoto;
 @property (nonatomic, assign) BOOL isTakingPhoto;
 
+// 水印相关
+@property (nonatomic, strong) NSString *watermarkLocation;
+@property (nonatomic, strong) NSString *watermarkLatitude;
+@property (nonatomic, strong) NSString *watermarkLongitude;
+@property (nonatomic, strong) NSString *watermarkOperator;
+
 // 摄像头格式相关方法
 - (AVCaptureDeviceFormat *)bestFormatForDevice:(AVCaptureDevice *)device;
 - (BOOL)configureBestFormatForDevice:(AVCaptureDevice *)device;
@@ -179,7 +185,15 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.currentCallback = callback;
     self.isTakingPhoto = NO;
     
+    // 解析水印相关参数
+    self.watermarkLocation = options[@"location"] ?: @"";
+    self.watermarkLatitude = options[@"latitude"] ?: @"";
+    self.watermarkLongitude = options[@"longitude"] ?: @"";
+    self.watermarkOperator = options[@"operator"] ?: @"";
+    
     [self addLog:@"========== 打开双摄 =========="];
+    [self addLog:[NSString stringWithFormat:@"水印参数: 地点=%@, 纬度=%@, 经度=%@, 操作人=%@", 
+                 self.watermarkLocation, self.watermarkLatitude, self.watermarkLongitude, self.watermarkOperator]];
     
     @try {
         if (@available(iOS 13.0, *)) {
@@ -497,17 +511,21 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 if (output == self.backOutput && self.waitingForBackPhoto) {
                     // 旋转照片为竖屏，与预览一致
                     UIImage *rotatedImage = [self rotateImage:image byDegrees:90];
-                    self.backImage = rotatedImage;
+                    // 添加水印
+                    UIImage *watermarkedImage = [self addWatermarkToImage:rotatedImage];
+                    self.backImage = watermarkedImage;
                     self.waitingForBackPhoto = NO;
-                    [self addLog:@"✅ 后置照片已捕获（已旋转为竖屏）"];
+                    [self addLog:@"✅ 后置照片已捕获（已旋转为竖屏并添加水印）"];
                 } else if (output == self.frontOutput && self.waitingForFrontPhoto) {
                     // 旋转照片为竖屏，与预览一致
                     UIImage *rotatedImage = [self rotateImage:image byDegrees:90];
                     // 前置摄像头需要水平翻转，与预览一致
                     rotatedImage = [self flipImageHorizontally:rotatedImage];
-                    self.frontImage = rotatedImage;
+                    // 添加水印
+                    UIImage *watermarkedImage = [self addWatermarkToImage:rotatedImage];
+                    self.frontImage = watermarkedImage;
                     self.waitingForFrontPhoto = NO;
-                    [self addLog:@"✅ 前置照片已捕获（已旋转为竖屏并水平翻转）"];
+                    [self addLog:@"✅ 前置照片已捕获（已旋转为竖屏、水平翻转并添加水印）"];
                 }
                 
                 if (!self.waitingForBackPhoto && !self.waitingForFrontPhoto) {
@@ -688,6 +706,81 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     return result;
 }
+
+// 添加水印到图片
+- (UIImage *)addWatermarkToImage:(UIImage *)image {
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, 0.0);
+    
+    // 绘制原始图片
+    [image drawInRect:CGRectMake(0, 0, image.size.width, image.size.height)];
+    
+    // 绘制水印
+    NSString *watermarkText = [self getWatermarkText];
+    UIFont *font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    UIColor *textColor = [UIColor colorWithWhite:1.0 alpha:0.6];
+    
+    // 计算水印大小
+    CGSize constraintSize = CGSizeMake(image.size.width * 0.6, MAXFLOAT);
+    CGRect textRect = [watermarkText boundingRectWithSize:constraintSize
+                                                  options:NSStringDrawingUsesLineFragmentOrigin
+                                               attributes:@{NSFontAttributeName: font}
+                                                  context:nil];
+    
+    // 计算水印位置（右下角）
+    CGFloat margin = 20.0;
+    CGRect drawRect = CGRectMake(
+        image.size.width - textRect.size.width - margin,
+        image.size.height - textRect.size.height - margin,
+        textRect.size.width,
+        textRect.size.height
+    );
+    
+    // 绘制文本
+    [textColor set];
+    [watermarkText drawInRect:drawRect withAttributes:@{NSFontAttributeName: font}];
+    
+    // 获取带水印的图片
+    UIImage *watermarkedImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    return watermarkedImage;
+}
+
+// 获取水印文本
+- (NSString *)getWatermarkText {
+    NSDate *now = [NSDate date];
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+    NSString *timeString = [formatter stringFromDate:now];
+    
+    // 构建水印内容
+    NSMutableString *watermarkText = [NSMutableString string];
+    
+    // 1. 拍摄时间
+    [watermarkText appendFormat:@"拍摄时间: %@\n", timeString];
+    
+    // 2. 拍摄地点
+    if (self.watermarkLocation.length > 0) {
+        [watermarkText appendFormat:@"拍摄地点: %@\n", self.watermarkLocation];
+    }
+    
+    // 3. 经纬度
+    if (self.watermarkLatitude.length > 0 && self.watermarkLongitude.length > 0) {
+        [watermarkText appendFormat:@"经纬度: %@,%@\n", self.watermarkLatitude, self.watermarkLongitude];
+    }
+    
+    // 4. 操作人
+    if (self.watermarkOperator.length > 0) {
+        [watermarkText appendFormat:@"操作人: %@\n", self.watermarkOperator];
+    }
+    
+    // 5. 平台名称
+    [watermarkText appendString:@"智慧电梯维保平台"];
+    
+    return watermarkText;
+}
+
+
 
 - (void)dealloc {
     if (self.colorSpace) {
