@@ -344,34 +344,37 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             
-            // ========== 修改1: 后置预览改为 AspectFit ==========
+            // ========== 后置预览：至少一个方向铺满屏幕 ==========
             CGFloat viewWidth = topVC.view.bounds.size.width;
             CGFloat viewHeight = topVC.view.bounds.size.height;
-            
-            // 获取摄像头画面比例（宽/高）
-            CGFloat videoAspectRatio = backResolution.width / backResolution.height;
-            
+
+            // 摄像头旋转后的竖屏比例 = 高度/宽度
+            CGFloat videoAspectRatio = backResolution.height / backResolution.width;
+            CGFloat screenAspectRatio = viewHeight / viewWidth;
+
             CGFloat fitWidth, fitHeight;
-            if (videoAspectRatio > viewWidth / viewHeight) {
-                // 画面更宽，按宽度缩放，上下黑边
-                fitWidth = viewWidth;
-                fitHeight = fitWidth / videoAspectRatio;
-            } else {
-                // 画面更高，按高度缩放，左右黑边
+
+            if (videoAspectRatio > screenAspectRatio) {
+                // 画面更瘦高，按高度铺满屏幕，宽度居中（左右黑边）
                 fitHeight = viewHeight;
-                fitWidth = fitHeight * videoAspectRatio;
+                fitWidth = fitHeight / videoAspectRatio;
+            } else {
+                // 画面更矮宽，按宽度铺满屏幕，高度居中（上下黑边）
+                fitWidth = viewWidth;
+                fitHeight = fitWidth * videoAspectRatio;
             }
-            
+
             CGFloat fitX = (viewWidth - fitWidth) / 2;
             CGFloat fitY = (viewHeight - fitHeight) / 2;
-            
-            [self addLog:[NSString stringWithFormat:@"AspectFit 显示区域: (%.0f,%.0f,%.0f,%.0f)", fitX, fitY, fitWidth, fitHeight]];
-            
+
+            [self addLog:[NSString stringWithFormat:@"屏幕比例: %.2f, 画面比例: %.2f", screenAspectRatio, videoAspectRatio]];
+            [self addLog:[NSString stringWithFormat:@"显示区域: (%.0f,%.0f,%.0f,%.0f)", fitX, fitY, fitWidth, fitHeight]];
+
             // 后置预览
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
-            
+
             self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor clearColor];
@@ -380,7 +383,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             // 旋转后交换宽高
             self.backImageView.frame = CGRectMake(fitX, fitY, fitHeight, fitWidth);
             [self.backPreviewView addSubview:self.backImageView];
-            [self addLog:@"✅ 后置预览视图已创建（AspectFit效果）"];
+            [self addLog:@"✅ 后置预览视图已创建（至少一个方向铺满）"];
             
             // 前置小窗（保持不变）
             CGFloat smallWidth = 120;
