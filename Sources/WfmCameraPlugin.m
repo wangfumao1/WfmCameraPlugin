@@ -495,13 +495,19 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             if (self.isTakingPhoto) {
                 if (output == self.backOutput && self.waitingForBackPhoto) {
-                    self.backImage = image;
+                    // 旋转照片为竖屏，与预览一致
+                    UIImage *rotatedImage = [self rotateImage:image byDegrees:90];
+                    self.backImage = rotatedImage;
                     self.waitingForBackPhoto = NO;
-                    [self addLog:@"✅ 后置照片已捕获"];
+                    [self addLog:@"✅ 后置照片已捕获（已旋转为竖屏）"];
                 } else if (output == self.frontOutput && self.waitingForFrontPhoto) {
-                    self.frontImage = image;
+                    // 旋转照片为竖屏，与预览一致
+                    UIImage *rotatedImage = [self rotateImage:image byDegrees:90];
+                    // 前置摄像头需要水平翻转，与预览一致
+                    rotatedImage = [self flipImageHorizontally:rotatedImage];
+                    self.frontImage = rotatedImage;
                     self.waitingForFrontPhoto = NO;
-                    [self addLog:@"✅ 前置照片已捕获"];
+                    [self addLog:@"✅ 前置照片已捕获（已旋转为竖屏并水平翻转）"];
                 }
                 
                 if (!self.waitingForBackPhoto && !self.waitingForFrontPhoto) {
@@ -650,6 +656,37 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         currentShowingVC = vc;
     }
     return currentShowingVC;
+}
+
+// 旋转图片
+- (UIImage *)rotateImage:(UIImage *)image byDegrees:(CGFloat)degrees {
+    CGAffineTransform transform = CGAffineTransformMakeRotation(degrees * M_PI / 180.0);
+    CGSize rotatedSize = CGSizeMake(image.size.height, image.size.width);
+    
+    UIGraphicsBeginImageContext(rotatedSize);
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    CGContextTranslateCTM(context, rotatedSize.width / 2, rotatedSize.height / 2);
+    CGContextRotateCTM(context, degrees * M_PI / 180.0);
+    [image drawInRect:CGRectMake(-image.size.width / 2, -image.size.height / 2, image.size.width, image.size.height)];
+    UIImage *rotatedImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    return rotatedImage;
+}
+
+// 水平翻转图片
+- (UIImage *)flipImageHorizontally:(UIImage *)image {
+    CGAffineTransform transform = CGAffineTransformMakeScale(-1.0, 1.0);
+    UIImage *flippedImage = [UIImage imageWithCGImage:image.CGImage scale:image.scale orientation:UIImageOrientationUp];
+    
+    UIGraphicsBeginImageContext(flippedImage.size);
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    CGContextConcatCTM(context, transform);
+    [flippedImage drawInRect:CGRectMake(-flippedImage.size.width, 0, flippedImage.size.width, flippedImage.size.height)];
+    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    return result;
 }
 
 - (void)dealloc {
