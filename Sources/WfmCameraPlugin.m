@@ -572,19 +572,21 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (image) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (targetImageView.superview) {
+                // 预览直接显示（画面已经是竖屏）
                 targetImageView.image = image;
             }
             
+            // 拍照
             if (self.isTakingPhoto) {
                 if (output == self.backOutput && self.waitingForBackPhoto) {
-                    // 画面已经是竖屏，直接加水印
-                    UIImage *watermarkedImage = [self addWatermarkToImage:originalImage];
+                    // ✅ 画面已经是竖屏，直接加水印
+                    UIImage *watermarkedImage = [self addWatermarkToImage:image];
                     self.backImage = watermarkedImage;
                     self.waitingForBackPhoto = NO;
                     [self addLog:@"✅ 后置照片已捕获"];
                 } else if (output == self.frontOutput && self.waitingForFrontPhoto) {
-                    // 前置需要镜像
-                    UIImage *mirroredImage = [self flipImageHorizontally:originalImage];
+                    // ✅ 前置需要镜像
+                    UIImage *mirroredImage = [self flipImageHorizontally:image];
                     UIImage *watermarkedImage = [self addWatermarkToImage:mirroredImage];
                     self.frontImage = watermarkedImage;
                     self.waitingForFrontPhoto = NO;
