@@ -348,49 +348,51 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             CGFloat viewWidth = topVC.view.bounds.size.width;
             CGFloat viewHeight = topVC.view.bounds.size.height;
 
-            // 摄像头旋转后的竖屏比例 = 高度/宽度
+            // 摄像头旋转后的竖屏比例 = 原始高度 / 原始宽度
             CGFloat videoAspectRatio = backResolution.height / backResolution.width;
             CGFloat screenAspectRatio = viewHeight / viewWidth;
 
-            CGFloat fitWidth, fitHeight;
+            CGFloat targetWidth, targetHeight;  // 旋转前的目标尺寸
 
             if (videoAspectRatio > screenAspectRatio) {
-                // 画面更瘦高，按高度铺满屏幕，宽度居中（左右黑边）
-                fitHeight = viewHeight;
-                fitWidth = fitHeight / videoAspectRatio;
+                // 画面更瘦高，按高度铺满屏幕，宽度居中
+                // 旋转前：高度 = viewHeight，宽度 = viewHeight / videoAspectRatio
+                targetHeight = viewHeight;
+                targetWidth = targetHeight / videoAspectRatio;
             } else {
-                // 画面更矮宽，按宽度铺满屏幕，高度居中（上下黑边）
-                fitWidth = viewWidth;
-                fitHeight = fitWidth * videoAspectRatio;
+                // 画面更矮宽，按宽度铺满屏幕，高度居中
+                // 旋转前：宽度 = viewWidth，高度 = viewWidth * videoAspectRatio
+                targetWidth = viewWidth;
+                targetHeight = targetWidth * videoAspectRatio;
             }
 
-            CGFloat fitX = (viewWidth - fitWidth) / 2;
-            CGFloat fitY = (viewHeight - fitHeight) / 2;
+            CGFloat fitX = (viewWidth - targetWidth) / 2;
+            CGFloat fitY = (viewHeight - targetHeight) / 2;
 
             [self addLog:[NSString stringWithFormat:@"屏幕比例: %.2f, 画面比例: %.2f", screenAspectRatio, videoAspectRatio]];
-            [self addLog:[NSString stringWithFormat:@"显示区域: (%.0f,%.0f,%.0f,%.0f)", fitX, fitY, fitWidth, fitHeight]];
+            [self addLog:[NSString stringWithFormat:@"目标区域(旋转前): (%.0f,%.0f,%.0f,%.0f)", fitX, fitY, targetWidth, targetHeight]];
 
             // 后置预览
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
 
-            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(fitX, fitY, fitWidth, fitHeight)];
+            // 注意：旋转后宽高交换，所以 ImageView 的 frame 要交换宽高
+            self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(fitX, fitY, targetHeight, targetWidth)];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor clearColor];
             // 旋转90度
             self.backImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
-            // 旋转后交换宽高
-            self.backImageView.frame = CGRectMake(fitX, fitY, fitHeight, fitWidth);
             [self.backPreviewView addSubview:self.backImageView];
             [self addLog:@"✅ 后置预览视图已创建（至少一个方向铺满）"];
             
-            // 前置小窗（保持不变）
+            // 前置小窗 - 旋转后宽高交换
+            // 小窗固定宽度 120，高度按画面比例计算
             CGFloat smallWidth = 120;
-            CGFloat smallHeight = smallWidth / displayAspectRatio;
+            CGFloat smallHeight = smallWidth * videoAspectRatio;  // 注意：旋转后高度 = 宽度 × 画面比例
             CGFloat margin = 16;
             CGFloat topOffset = 100;
-            
+
             self.frontPreviewView = [[UIView alloc] initWithFrame:CGRectMake(
                 topVC.view.bounds.size.width - smallWidth - margin,
                 topOffset,
@@ -403,9 +405,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontPreviewView.layer.borderWidth = 2;
             self.frontPreviewView.layer.borderColor = [UIColor whiteColor].CGColor;
             [topVC.view addSubview:self.frontPreviewView];
-            
+
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
+            // 前置旋转90度 + 镜像
             self.frontImageView.transform = CGAffineTransformMakeRotation(M_PI_2);
             self.frontImageView.transform = CGAffineTransformScale(self.frontImageView.transform, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
