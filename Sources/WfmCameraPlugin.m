@@ -3,6 +3,11 @@
 #import <UIKit/UIKit.h>
 #import <Photos/Photos.h>
 
+// 在文件顶部添加头文件
+#import "PDRCoreApp.h"
+#import "PDRCoreAppManager.h"
+#import "PDRCoreAppInfo.h"
+
 // 错误码定义
 typedef NS_ENUM(NSInteger, WfmCameraErrorCode) {
     WfmCameraErrorUnsupportedOS = 1001,           // iOS 版本不支持
@@ -159,34 +164,33 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.currentCallback = nil;
 }
 
-// 保存图片到临时路径 - 返回 UniApp 兼容的 _doc/ 格式
+// 保存图片到 UniApp 可访问的路径
 - (NSString *)saveImageToTempPath:(UIImage *)image withPrefix:(NSString *)prefix {
-    // 获取 UniApp 文档目录（_doc/ 对应的真实路径）
-    NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    // 获取 UniApp 主应用的 documentPath（对应 _doc/）
+    PDRCoreAppInfo *appinfo = [PDRCore Instance].appManager.getMainAppInfo;
+    NSString *docPath = appinfo.documentPath;
     
-    // 创建临时相机目录
-    NSString *cameraDir = [docPath stringByAppendingPathComponent:@"uniapp_temp_相机"];
+    // 创建相机子目录
+    NSString *cameraDir = [docPath stringByAppendingPathComponent:@"camera"];
     NSFileManager *fileManager = [NSFileManager defaultManager];
     if (![fileManager fileExistsAtPath:cameraDir]) {
         [fileManager createDirectoryAtPath:cameraDir withIntermediateDirectories:YES attributes:nil error:nil];
     }
     
-    // 生成文件名
+    // 生成唯一文件名
     long long milliseconds = (long long)([[NSDate date] timeIntervalSince1970] * 1000);
     int randomNum = arc4random_uniform(10000);
-    NSString *fileName = [NSString stringWithFormat:@"%@_%lld_%d.jpg", prefix, milliseconds, randomNum];
-    NSString *realFilePath = [cameraDir stringByAppendingPathComponent:fileName];
+    NSString *fileName = [NSString stringWithFormat:@"photo_%lld_%d.jpg", milliseconds, randomNum];
+    NSString *filePath = [cameraDir stringByAppendingPathComponent:fileName];
     
     // 保存图片
     NSData *imageData = UIImageJPEGRepresentation(image, 0.9);
-    [imageData writeToFile:realFilePath atomically:YES];
+    [imageData writeToFile:filePath atomically:YES];
     
-    // ✅ 返回 UniApp 兼容的 _doc/ 格式路径
-    // realFilePath 例如: /var/mobile/.../Documents/uniapp_temp_相机/back_xxx.jpg
-    // 转换为: _doc/uniapp_temp_相机/back_xxx.jpg
-    NSString *relativePath = [realFilePath stringByReplacingOccurrencesOfString:docPath withString:@"_doc"];
+    // ✅ 返回 UniApp 可访问的相对路径（_doc/camera/xxx.jpg）
+    NSString *relativePath = [NSString stringWithFormat:@"_doc/camera/%@", fileName];
     
-    [self addLog:[NSString stringWithFormat:@"照片已保存: %@ -> %@", realFilePath, relativePath]];
+    [self addLog:[NSString stringWithFormat:@"照片已保存: %@", relativePath]];
     return relativePath;
 }
 
