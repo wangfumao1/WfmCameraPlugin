@@ -159,10 +159,13 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.currentCallback = nil;
 }
 
-// 保存图片到临时路径（不保存到相册）
-- (NSString *)saveImageToTempPath:(UIImage *)image {
+// 保存图片到临时路径 - 确保文件名唯一
+- (NSString *)saveImageToTempPath:(UIImage *)image withPrefix:(NSString *)prefix {
     NSString *tempPath = NSTemporaryDirectory();
-    NSString *fileName = [NSString stringWithFormat:@"photo_%.0f.jpg", [[NSDate date] timeIntervalSince1970]];
+    // 使用微秒级时间戳 + 随机数 + 前缀，确保唯一
+    long long milliseconds = (long long)([[NSDate date] timeIntervalSince1970] * 1000);
+    int randomNum = arc4random_uniform(10000);
+    NSString *fileName = [NSString stringWithFormat:@"%@_%lld_%d.jpg", prefix, milliseconds, randomNum];
     NSString *filePath = [tempPath stringByAppendingPathComponent:fileName];
     
     // 压缩图片质量
@@ -657,7 +660,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (self.backImage) {
         dispatch_group_enter(group);
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            backPath = [self saveImageToTempPath:self.backImage];
+            backPath = [self saveImageToTempPath:self.backImage withPrefix:@"back"];
             [self addLog:[NSString stringWithFormat:@"后置照片已保存: %@", backPath]];
             dispatch_group_leave(group);
         });
@@ -667,7 +670,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (self.frontImage) {
         dispatch_group_enter(group);
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            frontPath = [self saveImageToTempPath:self.frontImage];
+            frontPath = [self saveImageToTempPath:self.frontImage withPrefix:@"front"];
             [self addLog:[NSString stringWithFormat:@"前置照片已保存: %@", frontPath]];
             dispatch_group_leave(group);
         });
