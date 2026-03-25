@@ -3,6 +3,28 @@
 #import <UIKit/UIKit.h>
 #import <Photos/Photos.h>
 
+// 错误码定义
+typedef NS_ENUM(NSInteger, WfmCameraErrorCode) {
+    WfmCameraErrorUnsupportedOS = 1001,           // iOS 版本不支持
+    WfmCameraErrorCameraPermissionDenied = 1002,   // 相机权限被拒绝
+    WfmCameraErrorPhotoPermissionDenied = 1003,    // 相册权限被拒绝
+    WfmCameraErrorCameraUnavailable = 1004,        // 找不到摄像头
+    WfmCameraErrorUserCancel = 1005,               // 用户取消
+    WfmCameraErrorCaptureFailed = 1006,            // 拍照失败
+    WfmCameraErrorSaveFailed = 1007,               // 保存失败
+    WfmCameraErrorSetupFailed = 1008               // 初始化失败
+};
+
+// 错误类型字符串
+static NSString *const kErrorTypeUnsupportedOS = @"unsupported_os";
+static NSString *const kErrorTypeCameraPermissionDenied = @"camera_permission_denied";
+static NSString *const kErrorTypePhotoPermissionDenied = @"photo_permission_denied";
+static NSString *const kErrorTypeCameraUnavailable = @"camera_unavailable";
+static NSString *const kErrorTypeUserCancel = @"user_cancel";
+static NSString *const kErrorTypeCaptureFailed = @"capture_failed";
+static NSString *const kErrorTypeSaveFailed = @"save_failed";
+static NSString *const kErrorTypeSetupFailed = @"setup_failed";
+
 @interface WfmCameraPlugin () <AVCaptureVideoDataOutputSampleBufferDelegate>
 
 @property (nonatomic, strong) AVCaptureMultiCamSession *multiCamSession;
@@ -66,6 +88,59 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     NSLog(@"[WfmCameraPlugin] %@", message);
 }
 
+// 发送错误回调
+- (void)sendErrorWithCode:(WfmCameraErrorCode)code 
+                      msg:(NSString *)msg 
+                errorType:(NSString *)errorType 
+                 callback:(UniModuleKeepAliveCallback)callback {
+    if (callback) {
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        result[@"code"] = @(code);
+        result[@"success"] = @NO;
+        result[@"msg"] = msg;
+        result[@"errorType"] = errorType;
+        if (self.logs && self.logs.count > 0) {
+            result[@"logs"] = [self.logs copy];
+        }
+        callback(result, NO);
+    }
+    if (self.logs) {
+        [self.logs removeAllObjects];
+    }
+    self.currentCallback = nil;
+}
+
+// 发送成功回调
+- (void)sendSuccessWithBackPath:(NSString *)backPath 
+                      frontPath:(NSString *)frontPath 
+                       callback:(UniModuleKeepAliveCallback)callback {
+    if (callback) {
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        result[@"code"] = @0;
+        result[@"success"] = @YES;
+        result[@"msg"] = @"拍照成功";
+        
+        NSMutableDictionary *data = [NSMutableDictionary dictionary];
+        if (backPath) {
+            data[@"backPath"] = backPath;
+        }
+        if (frontPath) {
+            data[@"frontPath"] = frontPath;
+        }
+        result[@"data"] = data;
+        
+        if (self.logs && self.logs.count > 0) {
+            result[@"logs"] = [self.logs copy];
+        }
+        callback(result, NO);
+    }
+    if (self.logs) {
+        [self.logs removeAllObjects];
+    }
+    self.currentCallback = nil;
+}
+
+// 发送普通结果（用于取消等）
 - (void)sendResult:(BOOL)success message:(NSString *)message callback:(UniModuleKeepAliveCallback)callback {
     if (callback) {
         NSMutableDictionary *result = [NSMutableDictionary dictionary];
@@ -84,84 +159,18 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.currentCallback = nil;
 }
 
-- (void)sendPhotoResult:(NSString *)backPath frontPath:(NSString *)frontPath {
-    if (self.currentCallback) {
-        NSMutableDictionary *result = [NSMutableDictionary dictionary];
-        result[@"success"] = @YES;
-        result[@"msg"] = @"拍照成功";
-        if (backPath) {
-            result[@"backPath"] = backPath;
-        }
-        if (frontPath) {
-            result[@"frontPath"] = frontPath;
-        }
-        if (self.logs && self.logs.count > 0) {
-            result[@"logs"] = [self.logs copy];
-        }
-        self.currentCallback(result, NO);
-        self.currentCallback = nil;
-    }
-    [self.logs removeAllObjects];
-}
-
-- (void)saveImageToPhotoLibrary:(UIImage *)image completion:(void(^)(NSString *path, NSError *error))completion {
-    PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
+// 保存图片到临时路径（不保存到相册）
+- (NSString *)saveImageToTempPath:(UIImage *)image {
+    NSString *tempPath = NSTemporaryDirectory();
+    NSString *fileName = [NSString stringWithFormat:@"photo_%.0f.jpg", [[NSDate date] timeIntervalSince1970]];
+    NSString *filePath = [tempPath stringByAppendingPathComponent:fileName];
     
-    if (status == PHAuthorizationStatusNotDetermined) {
-        [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus newStatus) {
-            if (newStatus == PHAuthorizationStatusAuthorized) {
-                [self performSaveImage:image completion:completion];
-            } else {
-                if (completion) {
-                    completion(nil, [NSError errorWithDomain:@"WfmCameraPlugin" code:4001 userInfo:@{NSLocalizedDescriptionKey: @"相册权限未授权"}]);
-                }
-            }
-        }];
-    } else if (status == PHAuthorizationStatusAuthorized) {
-        [self performSaveImage:image completion:completion];
-    } else {
-        if (completion) {
-            completion(nil, [NSError errorWithDomain:@"WfmCameraPlugin" code:4002 userInfo:@{NSLocalizedDescriptionKey: @"请先在设置中开启相册权限"}]);
-        }
-    }
-}
-
-- (void)performSaveImage:(UIImage *)image completion:(void(^)(NSString *path, NSError *error))completion {
-    __block NSString *localIdentifier = nil;
+    // 压缩图片质量
+    NSData *imageData = UIImageJPEGRepresentation(image, 0.9);
+    [imageData writeToFile:filePath atomically:YES];
     
-    [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
-        PHAssetChangeRequest *request = [PHAssetChangeRequest creationRequestForAssetFromImage:image];
-        localIdentifier = request.placeholderForCreatedAsset.localIdentifier;
-    } completionHandler:^(BOOL success, NSError *error) {
-        if (success && localIdentifier) {
-            NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-            NSString *documentsPath = paths.firstObject;
-            NSString *fileName = [NSString stringWithFormat:@"photo_%.0f.jpg", [[NSDate date] timeIntervalSince1970]];
-            NSString *filePath = [documentsPath stringByAppendingPathComponent:fileName];
-            
-            // ✅ 1. 压缩分辨率，最大边 1080
-            UIImage *resizedImage = [self resizeImage:image maxSize:1080];
-            
-            // ✅ 2. 压缩质量
-            NSData *imageData = UIImageJPEGRepresentation(resizedImage, 0.7);
-            // 如果仍然大于 1M，继续压缩
-            CGFloat compression = 0.6;
-            while (imageData.length > 1024 * 1024 && compression > 0.1) {
-                imageData = UIImageJPEGRepresentation(resizedImage, compression);
-                compression -= 0.05;
-            }
-            
-            [imageData writeToFile:filePath atomically:YES];
-            
-            if (completion) {
-                completion(filePath, nil);
-            }
-        } else {
-            if (completion) {
-                completion(nil, error ?: [NSError errorWithDomain:@"WfmCameraPlugin" code:4004 userInfo:@{NSLocalizedDescriptionKey: @"保存图片失败"}]);
-            }
-        }
-    }];
+    [self addLog:[NSString stringWithFormat:@"照片已保存到临时路径: %@", filePath]];
+    return filePath;
 }
 
 - (void)log:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
@@ -207,14 +216,19 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                  self.watermarkLocation, self.watermarkLatitude, self.watermarkLongitude, self.watermarkOperator]];
     
     @try {
+        // 检查 iOS 版本
         if (@available(iOS 13.0, *)) {
             [self addLog:@"✅ iOS 13+ 检查通过"];
         } else {
             [self addLog:@"❌ 需要 iOS 13 或更高版本"];
-            [self sendResult:NO message:@"需要 iOS 13 或更高版本" callback:callback];
+            [self sendErrorWithCode:WfmCameraErrorUnsupportedOS 
+                                msg:@"需要 iOS 13 或更高版本" 
+                          errorType:kErrorTypeUnsupportedOS 
+                           callback:callback];
             return;
         }
         
+        // 检查相机权限
         AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
         [self addLog:[NSString stringWithFormat:@"相机权限状态: %ld", (long)status]];
         
@@ -225,19 +239,24 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                     dispatch_async(dispatch_get_main_queue(), ^{
                         if (granted) {
                             [self addLog:@"✅ 权限已授权"];
-                            // ✅ 授权后延迟一点再设置，确保视图已准备好
                             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                                 [self setupDualCamera];
                             });
                         } else {
                             [self addLog:@"❌ 用户拒绝相机权限"];
-                            [self sendResult:NO message:@"需要相机权限" callback:callback];
+                            [self sendErrorWithCode:WfmCameraErrorCameraPermissionDenied 
+                                                msg:@"需要相机权限，请在设置中开启" 
+                                          errorType:kErrorTypeCameraPermissionDenied 
+                                           callback:callback];
                         }
                     });
                 }];
             } else {
                 [self addLog:@"❌ 相机权限未授权"];
-                [self sendResult:NO message:@"请先在设置中开启相机权限" callback:callback];
+                [self sendErrorWithCode:WfmCameraErrorCameraPermissionDenied 
+                                    msg:@"相机权限未授权，请在设置中开启" 
+                              errorType:kErrorTypeCameraPermissionDenied 
+                               callback:callback];
             }
             return;
         }
@@ -247,7 +266,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         
     } @catch (NSException *exception) {
         [self addLog:[NSString stringWithFormat:@"❌ 异常: %@", exception.reason]];
-        [self sendResult:NO message:exception.reason callback:callback];
+        [self sendErrorWithCode:WfmCameraErrorSetupFailed 
+                            msg:exception.reason 
+                      errorType:kErrorTypeSetupFailed 
+                       callback:callback];
     }
 }
 
@@ -264,7 +286,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                                                                                position:AVCaptureDevicePositionBack];
             if (!backCamera) {
                 [self addLog:@"❌ 找不到后置摄像头"];
-                [self sendResult:NO message:@"找不到后置摄像头" callback:self.currentCallback];
+                [self sendErrorWithCode:WfmCameraErrorCameraUnavailable 
+                                    msg:@"找不到后置摄像头" 
+                              errorType:kErrorTypeCameraUnavailable 
+                               callback:self.currentCallback];
                 return;
             }
             
@@ -291,7 +316,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                                                                                 position:AVCaptureDevicePositionFront];
             if (!frontCamera) {
                 [self addLog:@"❌ 找不到前置摄像头"];
-                [self sendResult:NO message:@"找不到前置摄像头" callback:self.currentCallback];
+                [self sendErrorWithCode:WfmCameraErrorCameraUnavailable 
+                                    msg:@"找不到前置摄像头" 
+                              errorType:kErrorTypeCameraUnavailable 
+                               callback:self.currentCallback];
                 return;
             }
             
@@ -310,12 +338,29 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             [self configureBestFormatForDevice:frontCamera];
             
+            // 获取摄像头原始分辨率
+            CGSize backResolution = [self getCameraResolution:backCamera];
+            [self addLog:[NSString stringWithFormat:@"摄像头原始分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
+            
+            // ========== 强制竖屏比例计算 ==========
+            CGFloat width = backResolution.width;
+            CGFloat height = backResolution.height;
+            CGFloat displayHeight = MAX(width, height);
+            CGFloat displayWidth = MIN(width, height);
+            CGFloat videoAspectRatio = displayHeight / displayWidth;
+            
+            [self addLog:[NSString stringWithFormat:@"强制竖屏后尺寸: %.0f x %.0f", displayWidth, displayHeight]];
+            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
+            
             // ========== 3. 添加输入 ==========
             NSError *error = nil;
             self.backInput = [AVCaptureDeviceInput deviceInputWithDevice:backCamera error:&error];
             if (error || ![self.multiCamSession canAddInput:self.backInput]) {
                 [self addLog:@"❌ 无法添加后置输入"];
-                [self sendResult:NO message:@"后置摄像头添加失败" callback:self.currentCallback];
+                [self sendErrorWithCode:WfmCameraErrorSetupFailed 
+                                    msg:@"后置摄像头添加失败" 
+                              errorType:kErrorTypeSetupFailed 
+                               callback:self.currentCallback];
                 return;
             }
             [self.multiCamSession addInput:self.backInput];
@@ -324,7 +369,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontInput = [AVCaptureDeviceInput deviceInputWithDevice:frontCamera error:&error];
             if (error || ![self.multiCamSession canAddInput:self.frontInput]) {
                 [self addLog:@"❌ 无法添加前置输入"];
-                [self sendResult:NO message:@"前置摄像头添加失败" callback:self.currentCallback];
+                [self sendErrorWithCode:WfmCameraErrorSetupFailed 
+                                    msg:@"前置摄像头添加失败" 
+                              errorType:kErrorTypeSetupFailed 
+                               callback:self.currentCallback];
                 return;
             }
             [self.multiCamSession addInput:self.frontInput];
@@ -341,7 +389,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 if (self.backInput.ports.count > 0) {
                     AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
                     if (backConnection) {
-                        // 设置后置视频方向为竖屏
                         if ([backConnection isVideoOrientationSupported]) {
                             backConnection.videoOrientation = AVCaptureVideoOrientationPortrait;
                             [self addLog:@"✅ 后置视频方向设置为竖屏"];
@@ -364,12 +411,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 if (self.frontInput.ports.count > 0) {
                     AVCaptureConnection *frontConnection = [AVCaptureConnection connectionWithInputPorts:self.frontInput.ports output:self.frontOutput];
                     if (frontConnection) {
-                        // 设置前置视频方向为竖屏
                         if ([frontConnection isVideoOrientationSupported]) {
                             frontConnection.videoOrientation = AVCaptureVideoOrientationPortrait;
                             [self addLog:@"✅ 前置视频方向设置为竖屏"];
                         }
-                        // 前置摄像头镜像
                         if (frontConnection.isVideoMirroringSupported) {
                             frontConnection.videoMirrored = YES;
                             [self addLog:@"✅ 前置摄像头镜像已开启"];
@@ -381,73 +426,49 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                     }
                 }
             }
-
-            // 获取摄像头原始分辨率
-            CGSize backResolution = [self getCameraResolution:backCamera];
-            [self addLog:[NSString stringWithFormat:@"摄像头原始分辨率: %.0fx%.0f", backResolution.width, backResolution.height]];
-
-            // ========== 强制竖屏比例计算 ==========
-            CGFloat width = backResolution.width;
-            CGFloat height = backResolution.height;
-
-            // 强制竖屏：大的作为高度，小的作为宽度
-            CGFloat displayHeight = MAX(width, height);
-            CGFloat displayWidth = MIN(width, height);
-            CGFloat videoAspectRatio = displayHeight / displayWidth;  // 竖屏比例，> 1
-
-            [self addLog:[NSString stringWithFormat:@"强制竖屏后尺寸: %.0f x %.0f", displayWidth, displayHeight]];
-            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
             
             // ========== 5. 获取当前视图 ==========
             UIViewController *topVC = [self getTopViewController];
             if (!topVC) {
                 [self addLog:@"❌ 无法获取当前视图"];
-                [self sendResult:NO message:@"无法获取当前视图" callback:self.currentCallback];
+                [self sendErrorWithCode:WfmCameraErrorSetupFailed 
+                                    msg:@"无法获取当前视图" 
+                              errorType:kErrorTypeSetupFailed 
+                               callback:self.currentCallback];
                 return;
             }
             
-            // ========== 后置预览视图 ==========
+            CGFloat viewWidth = topVC.view.bounds.size.width;
+            CGFloat viewHeight = topVC.view.bounds.size.height;
+            
+            // ========== 6. 后置预览视图（顶部对齐） ==========
             self.backPreviewView = [[UIView alloc] initWithFrame:topVC.view.bounds];
             self.backPreviewView.backgroundColor = [UIColor blackColor];
             [topVC.view addSubview:self.backPreviewView];
-
-            CGFloat viewWidth = topVC.view.bounds.size.width;
-            CGFloat viewHeight = topVC.view.bounds.size.height;
-
-            // 强制竖屏比例
+            
             CGFloat imageWidth, imageHeight;
             if (videoAspectRatio > viewHeight / viewWidth) {
-                // 画面更瘦高，按高度铺满
                 imageHeight = viewHeight;
                 imageWidth = imageHeight / videoAspectRatio;
             } else {
-                // 画面更矮宽，按宽度铺满
                 imageWidth = viewWidth;
                 imageHeight = imageWidth * videoAspectRatio;
             }
-
-            // ✅ 顶部对齐：Y = 0，左右居中
+            
             CGFloat imageX = (viewWidth - imageWidth) / 2;
-            CGFloat imageY = 0;
-
+            CGFloat imageY = 0;  // 顶部对齐
+            
             self.backImageView = [[UIImageView alloc] initWithFrame:CGRectMake(imageX, imageY, imageWidth, imageHeight)];
             self.backImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.backImageView.backgroundColor = [UIColor clearColor];
             [self.backPreviewView addSubview:self.backImageView];
-
-            [self addLog:[NSString stringWithFormat:@"后置预览: 位置(%.0f,%.0f) 尺寸(%.0f,%.0f)", imageX, imageY, imageWidth, imageHeight]];
             [self addLog:@"✅ 后置预览视图已创建（顶部对齐）"];
             
             // ========== 7. 前置预览小窗 ==========
-            // 小窗固定宽度120，高度按画面比例自适应
             CGFloat smallWidth = 120;
             CGFloat smallHeight = smallWidth * videoAspectRatio;
             CGFloat margin = 16;
             CGFloat topOffset = 100;
-            
-            [self addLog:@"========== 前置小窗计算 =========="];
-            [self addLog:[NSString stringWithFormat:@"画面比例(高/宽): %.3f", videoAspectRatio]];
-            [self addLog:[NSString stringWithFormat:@"小窗尺寸: %.0f x %.0f", smallWidth, smallHeight]];
             
             self.frontPreviewView = [[UIView alloc] initWithFrame:CGRectMake(
                 topVC.view.bounds.size.width - smallWidth - margin,
@@ -465,7 +486,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.frontImageView = [[UIImageView alloc] initWithFrame:self.frontPreviewView.bounds];
             self.frontImageView.contentMode = UIViewContentModeScaleAspectFill;
             self.frontImageView.backgroundColor = [UIColor clearColor];
-            // 前置只需要镜像
             self.frontImageView.transform = CGAffineTransformScale(CGAffineTransformIdentity, -1, 1);
             [self.frontPreviewView addSubview:self.frontImageView];
             [self addLog:@"✅ 前置预览小窗已创建"];
@@ -505,7 +525,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
         } @catch (NSException *exception) {
             [self addLog:[NSString stringWithFormat:@"❌ 设置双摄时崩溃: %@", exception.reason]];
-            [self sendResult:NO message:exception.reason callback:self.currentCallback];
+            [self sendErrorWithCode:WfmCameraErrorSetupFailed 
+                                msg:exception.reason 
+                          errorType:kErrorTypeSetupFailed 
+                           callback:self.currentCallback];
         }
     });
 }
@@ -562,7 +585,17 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 - (void)closeButtonTapped {
     [self addLog:@"用户点击返回，取消拍照"];
     [self closeDualCameraAndCleanup];
-    [self sendResult:NO message:@"用户取消" callback:self.currentCallback];
+    [self sendErrorWithCode:WfmCameraErrorUserCancel 
+                        msg:@"用户取消拍照" 
+                  errorType:kErrorTypeUserCancel 
+                   callback:self.currentCallback];
+}
+
+- (void)closeDualCamera:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
+    [self.logs removeAllObjects];
+    [self addLog:@"========== 关闭双摄 =========="];
+    [self closeDualCameraAndCleanup];
+    [self sendResult:YES message:@"双摄已关闭" callback:callback];
 }
 
 #pragma mark - AVCaptureVideoDataOutputSampleBufferDelegate
@@ -584,20 +617,18 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (image) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (targetImageView.superview) {
-                // 预览直接显示（画面已经是竖屏）
                 targetImageView.image = image;
             }
             
-            // 拍照
             if (self.isTakingPhoto) {
                 if (output == self.backOutput && self.waitingForBackPhoto) {
-                    // ✅ 画面已经是竖屏，直接加水印
+                    // 后置照片：直接加水印
                     UIImage *watermarkedImage = [self addWatermarkToImage:image];
                     self.backImage = watermarkedImage;
                     self.waitingForBackPhoto = NO;
                     [self addLog:@"✅ 后置照片已捕获"];
                 } else if (output == self.frontOutput && self.waitingForFrontPhoto) {
-                    // ✅ 前置需要镜像
+                    // 前置照片：镜像后加水印
                     UIImage *mirroredImage = [self flipImageHorizontally:image];
                     UIImage *watermarkedImage = [self addWatermarkToImage:mirroredImage];
                     self.frontImage = watermarkedImage;
@@ -607,73 +638,52 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 
                 if (!self.waitingForBackPhoto && !self.waitingForFrontPhoto) {
                     self.isTakingPhoto = NO;
-                    [self saveBothPhotosAndClose];
+                    [self saveBothPhotosToTemp];
                 }
             }
         });
     }
 }
 
-- (void)saveBothPhotosAndClose {
-    [self addLog:@"开始保存前后照片..."];
+- (void)saveBothPhotosToTemp {
+    [self addLog:@"开始保存前后照片到临时路径..."];
     
-    PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
-    
-    if (status == PHAuthorizationStatusNotDetermined) {
-        [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus newStatus) {
-            if (newStatus == PHAuthorizationStatusAuthorized) {
-                [self performSaveBothPhotosAndClose];
-            } else {
-                [self addLog:@"❌ 相册权限未授权"];
-                [self closeDualCameraAndCleanup];
-                [self sendResult:NO message:@"需要相册权限" callback:self.currentCallback];
-                self.isTakingPhoto = NO;
-            }
-        }];
-    } else if (status == PHAuthorizationStatusAuthorized) {
-        [self performSaveBothPhotosAndClose];
-    } else {
-        [self addLog:@"❌ 相册权限未授权"];
-        [self closeDualCameraAndCleanup];
-        [self sendResult:NO message:@"请先在设置中开启相册权限" callback:self.currentCallback];
-        self.isTakingPhoto = NO;
-    }
-}
-
-- (void)performSaveBothPhotosAndClose {
     __block NSString *backPath = nil;
     __block NSString *frontPath = nil;
-    __block NSError *backError = nil;
-    __block NSError *frontError = nil;
     
     dispatch_group_t group = dispatch_group_create();
     
+    // 保存后置照片到临时路径
     if (self.backImage) {
         dispatch_group_enter(group);
-        [self saveImageToPhotoLibrary:self.backImage completion:^(NSString *path, NSError *error) {
-            backPath = path;
-            backError = error;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            backPath = [self saveImageToTempPath:self.backImage];
+            [self addLog:[NSString stringWithFormat:@"后置照片已保存: %@", backPath]];
             dispatch_group_leave(group);
-        }];
+        });
     }
     
+    // 保存前置照片到临时路径
     if (self.frontImage) {
         dispatch_group_enter(group);
-        [self saveImageToPhotoLibrary:self.frontImage completion:^(NSString *path, NSError *error) {
-            frontPath = path;
-            frontError = error;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            frontPath = [self saveImageToTempPath:self.frontImage];
+            [self addLog:[NSString stringWithFormat:@"前置照片已保存: %@", frontPath]];
             dispatch_group_leave(group);
-        }];
+        });
     }
     
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         [self addLog:@"照片保存完成，关闭双摄"];
         [self closeDualCameraAndCleanup];
         
-        if (backError || frontError) {
-            [self sendResult:NO message:@"部分照片保存失败" callback:self.currentCallback];
+        if (backPath || frontPath) {
+            [self sendSuccessWithBackPath:backPath frontPath:frontPath callback:self.currentCallback];
         } else {
-            [self sendPhotoResult:backPath frontPath:frontPath];
+            [self sendErrorWithCode:WfmCameraErrorSaveFailed 
+                                msg:@"照片保存失败" 
+                          errorType:kErrorTypeSaveFailed 
+                           callback:self.currentCallback];
         }
         
         self.isTakingPhoto = NO;
@@ -781,7 +791,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return flippedImage;
 }
 
-#pragma mark - 水印（仿安卓样式：半透明背景、多行、不同颜色、左下角）
+#pragma mark - 水印
 
 - (NSArray *)getWatermarkTexts {
     NSDate *now = [NSDate date];
@@ -809,34 +819,31 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
 - (NSArray *)getWatermarkColors {
     return @[
-        [UIColor whiteColor],                                      // 拍摄时间 - 白色
-        [UIColor colorWithRed:1.0 green:1.0 blue:0.0 alpha:1.0],  // 黄色 - 地点
-        [UIColor colorWithRed:0.0 green:1.0 blue:0.6 alpha:1.0],  // 嫩绿色 - 经纬度
-        [UIColor colorWithRed:0.0 green:1.0 blue:1.0 alpha:1.0],  // 青色 - 操作人
-        [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:1.0]   // 橙色 - 平台
+        [UIColor whiteColor],
+        [UIColor colorWithRed:1.0 green:1.0 blue:0.0 alpha:1.0],
+        [UIColor colorWithRed:0.0 green:1.0 blue:0.6 alpha:1.0],
+        [UIColor colorWithRed:0.0 green:1.0 blue:1.0 alpha:1.0],
+        [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:1.0]
     ];
 }
 
 - (UIImage *)addWatermarkToImage:(UIImage *)image {
     CGSize imageSize = image.size;
     
-    // ✅ 水印宽度 = 图片宽度的 1/4
-    CGFloat watermarkWidth = imageSize.width / 4;
+    CGFloat fontSize = 14.0;
+    if (imageSize.width > 2000) fontSize = 18.0;
+    else if (imageSize.width > 1000) fontSize = 16.0;
+    else fontSize = 14.0;
     
-    // 动态计算字体大小（基于水印宽度）
-    CGFloat fontSize = watermarkWidth / 8.0;  // 大约 1/8 的宽度
-    fontSize = MAX(12.0, MIN(24.0, fontSize));
-    
-    CGFloat padding = watermarkWidth / 12.0;   // 内边距
-    CGFloat spacing = watermarkWidth / 30.0;   // 行间距
-    CGFloat margin = watermarkWidth / 10.0;    // 外边距
-    CGFloat cornerRadius = watermarkWidth / 20.0;  // 圆角
+    CGFloat padding = 10.0;
+    CGFloat spacing = 4.0;
+    CGFloat margin = 16.0;
+    CGFloat cornerRadius = 6.0;
     
     NSArray *texts = [self getWatermarkTexts];
     NSArray *colors = [self getWatermarkColors];
     UIFont *font = [UIFont systemFontOfSize:fontSize weight:UIFontWeightMedium];
     
-    // 计算文本尺寸
     CGFloat maxTextWidth = 0;
     CGFloat totalTextHeight = 0;
     NSMutableArray *textHeights = [NSMutableArray array];
@@ -853,35 +860,27 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     }
     totalTextHeight += spacing * (texts.count - 1);
     
-    // 背景宽度 = 最大文本宽度 + 左右内边距，但不能超过水印最大宽度
-    CGFloat bgWidth = MIN(maxTextWidth + padding * 2, watermarkWidth);
+    CGFloat bgWidth = maxTextWidth + padding * 2;
     CGFloat bgHeight = totalTextHeight + padding * 2;
-    
-    // 左下角位置
     CGFloat bgX = margin;
     CGFloat bgY = imageSize.height - margin - bgHeight;
     
-    // 开始绘制
     UIGraphicsBeginImageContextWithOptions(imageSize, NO, 1.0);
     CGContextRef context = UIGraphicsGetCurrentContext();
     
-    // 1. 绘制原图
     [image drawInRect:CGRectMake(0, 0, imageSize.width, imageSize.height)];
     
-    // 2. 绘制半透明背景
     UIBezierPath *bgPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(bgX, bgY, bgWidth, bgHeight)
                                                        cornerRadius:cornerRadius];
     [[UIColor colorWithWhite:0 alpha:0.5] setFill];
     [bgPath fill];
     
-    // 3. 绘制细边框
     CGContextSetStrokeColorWithColor(context, [UIColor colorWithWhite:1 alpha:0.5].CGColor);
     CGContextSetLineWidth(context, 1.0);
     UIBezierPath *borderPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(bgX + 0.5, bgY + 0.5, bgWidth - 1, bgHeight - 1)
                                                           cornerRadius:cornerRadius - 0.5];
     [borderPath stroke];
     
-    // 4. 绘制文本
     CGFloat currentY = bgY + padding;
     for (NSInteger i = 0; i < texts.count; i++) {
         NSString *text = texts[i];
@@ -965,33 +964,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     if (self.colorSpace) {
         CGColorSpaceRelease(self.colorSpace);
     }
-}
-
-// 压缩图片到指定最大边长
-- (UIImage *)resizeImage:(UIImage *)image maxSize:(CGFloat)maxSize {
-    CGFloat width = image.size.width;
-    CGFloat height = image.size.height;
-    
-    if (width <= maxSize && height <= maxSize) {
-        return image;
-    }
-    
-    CGFloat scale;
-    if (width > height) {
-        scale = maxSize / width;
-    } else {
-        scale = maxSize / height;
-    }
-    
-    CGFloat newWidth = width * scale;
-    CGFloat newHeight = height * scale;
-    
-    UIGraphicsBeginImageContext(CGSizeMake(newWidth, newHeight));
-    [image drawInRect:CGRectMake(0, 0, newWidth, newHeight)];
-    UIImage *resizedImage = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    
-    return resizedImage;
 }
 
 @end
