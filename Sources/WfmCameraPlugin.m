@@ -159,21 +159,35 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     self.currentCallback = nil;
 }
 
-// 保存图片到临时路径 - 确保文件名唯一
+// 保存图片到临时路径 - 返回 UniApp 兼容的 _doc/ 格式
 - (NSString *)saveImageToTempPath:(UIImage *)image withPrefix:(NSString *)prefix {
-    NSString *tempPath = NSTemporaryDirectory();
-    // 使用微秒级时间戳 + 随机数 + 前缀，确保唯一
+    // 获取 UniApp 文档目录（_doc/ 对应的真实路径）
+    NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    
+    // 创建临时相机目录
+    NSString *cameraDir = [docPath stringByAppendingPathComponent:@"uniapp_temp_相机"];
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:cameraDir]) {
+        [fileManager createDirectoryAtPath:cameraDir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    
+    // 生成文件名
     long long milliseconds = (long long)([[NSDate date] timeIntervalSince1970] * 1000);
     int randomNum = arc4random_uniform(10000);
     NSString *fileName = [NSString stringWithFormat:@"%@_%lld_%d.jpg", prefix, milliseconds, randomNum];
-    NSString *filePath = [tempPath stringByAppendingPathComponent:fileName];
+    NSString *realFilePath = [cameraDir stringByAppendingPathComponent:fileName];
     
-    // 压缩图片质量
+    // 保存图片
     NSData *imageData = UIImageJPEGRepresentation(image, 0.9);
-    [imageData writeToFile:filePath atomically:YES];
+    [imageData writeToFile:realFilePath atomically:YES];
     
-    [self addLog:[NSString stringWithFormat:@"照片已保存到临时路径: %@", filePath]];
-    return filePath;
+    // ✅ 返回 UniApp 兼容的 _doc/ 格式路径
+    // realFilePath 例如: /var/mobile/.../Documents/uniapp_temp_相机/back_xxx.jpg
+    // 转换为: _doc/uniapp_temp_相机/back_xxx.jpg
+    NSString *relativePath = [realFilePath stringByReplacingOccurrencesOfString:docPath withString:@"_doc"];
+    
+    [self addLog:[NSString stringWithFormat:@"照片已保存: %@ -> %@", realFilePath, relativePath]];
+    return relativePath;
 }
 
 - (void)log:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
