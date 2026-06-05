@@ -1,6 +1,6 @@
 //
 //  WfmCameraPlugin.m
-//  在原代码基础上只添加 XS Max 适配
+//  在原代码基础上只添加 XS Max 适配 - 修复编译错误
 //
 
 #import "WfmCameraPlugin.h"
@@ -362,10 +362,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             // ========== XS Max 关键修复1: 启用多任务摄像头访问 ==========
             // 不配置这个，XS Max 等机型可能没有实际画面输出
-            self.multiCamSession.isMultitaskingCameraAccessEnabled = YES;
-            [self addLog:@"✅ 已启用 isMultitaskingCameraAccessEnabled (XS Max 适配)"];
-            
-            // ========== XS Max 关键修复2: 设置不丢弃延迟帧 ==========
+            if (@available(iOS 13.0, *)) {
+                self.multiCamSession.isMultitaskingCameraAccessEnabled = YES;
+                [self addLog:@"✅ 已启用 isMultitaskingCameraAccessEnabled (XS Max 适配)"];
+            }
             
             // ========== 1. 获取并配置后置摄像头 ==========
             AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
@@ -820,7 +820,9 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return image;
 }
 
-#pragma mark - 获取当前视图控制器- (UIViewController *)getTopViewController {
+#pragma mark - 获取当前视图控制器
+
+- (UIViewController *)getTopViewController {
     UIViewController *vc = nil;
     
     if (@available(iOS 13.0, *)) {
