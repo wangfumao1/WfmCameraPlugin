@@ -70,6 +70,9 @@ static NSString *const kErrorTypeSetupFailed = @"setup_failed";
 // 连接配置方法
 - (BOOL)setupConnections API_AVAILABLE(ios(13.0));
 
+// 双摄支持检测方法
+- (BOOL)isDeviceSupportDualCamera API_AVAILABLE(ios(13.0));
+
 @end
 
 @implementation WfmCameraPlugin
@@ -302,8 +305,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // ========== 1. 检查设备是否支持双摄（类属性，通过类访问） ==========
-            if (!AVCaptureMultiCamSession.multiCamSupported) {
+            // ========== 1. 检查设备是否支持双摄 ==========
+            if (![self isDeviceSupportDualCamera]) {
                 [self addLog:@"❌ 设备不支持双摄"];
                 [self sendErrorWithCode:WfmCameraErrorCameraUnavailable 
                                     msg:@"设备不支持双摄功能" 
@@ -1068,6 +1071,35 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     [self addLog:[NSString stringWithFormat:@"✅ %@视频输出添加成功", isFront ? @"前置" : @"后置"]];
     
     return YES;
+}
+
+#pragma mark - 双摄支持检测
+
+- (BOOL)isDeviceSupportDualCamera API_AVAILABLE(ios(13.0)) {
+    // 方法1: 检查系统类属性（iOS 13+）
+    if ([AVCaptureMultiCamSession respondsToSelector:@selector(multiCamSupported)]) {
+        if (AVCaptureMultiCamSession.multiCamSupported) {
+            [self addLog:@"✅ 系统检测: 设备支持双摄"];
+            return YES;
+        }
+        [self addLog:@"⚠️ 系统检测: 设备不支持双摄，尝试手动检测..."];
+    }
+    
+    // 方法2: 手动检测前后置摄像头是否都存在
+    AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                                                      mediaType:AVMediaTypeVideo
+                                                                       position:AVCaptureDevicePositionBack];
+    AVCaptureDevice *frontCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                                                       mediaType:AVMediaTypeVideo
+                                                                        position:AVCaptureDevicePositionFront];
+    
+    if (backCamera && frontCamera) {
+        [self addLog:@"✅ 手动检测: 前后置摄像头都存在"];
+        return YES;
+    }
+    
+    [self addLog:@"❌ 手动检测: 缺少前置或后置摄像头"];
+    return NO;
 }
 
 - (void)dealloc {
