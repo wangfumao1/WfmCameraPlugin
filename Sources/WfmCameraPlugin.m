@@ -302,11 +302,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // ========== 1. 创建 MultiCamSession 并检查设备支持 ==========
-            self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
-            
-            // 检查设备是否支持双摄（必须在创建实例后调用）
-            if (!self.multiCamSession.isMultiCamSupported) {
+            // ========== 1. 检查设备是否支持双摄（类属性，通过类访问） ==========
+            if (!AVCaptureMultiCamSession.multiCamSupported) {
                 [self addLog:@"❌ 设备不支持双摄"];
                 [self sendErrorWithCode:WfmCameraErrorCameraUnavailable 
                                     msg:@"设备不支持双摄功能" 
@@ -315,6 +312,9 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 return;
             }
             [self addLog:@"✅ 设备支持双摄"];
+            
+            // 创建 MultiCamSession
+            self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
             
             // ========== 2. 配置会话关键属性 ==========
             // 禁止自动配置音频会话，避免干扰视频捕获
