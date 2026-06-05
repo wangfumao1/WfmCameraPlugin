@@ -1,8 +1,16 @@
-//
-//  WfmCameraPlugin.m
-//  在原代码基础上只添加 XS Max 适配 - 修复编译错误
-//
+WfmCameraPlugin.h
+#import "DCUniModule.h"
 
+NS_ASSUME_NONNULL_BEGIN
+
+@interface WfmCameraPlugin : DCUniModule
+
+@end
+
+NS_ASSUME_NONNULL_END
+
+
+WfmCameraPlugin.m
 #import "WfmCameraPlugin.h"
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
@@ -22,9 +30,7 @@ typedef NS_ENUM(NSInteger, WfmCameraErrorCode) {
     WfmCameraErrorUserCancel = 1005,               // 用户取消
     WfmCameraErrorCaptureFailed = 1006,            // 拍照失败
     WfmCameraErrorSaveFailed = 1007,               // 保存失败
-    WfmCameraErrorSetupFailed = 1008,              // 初始化失败
-    WfmCameraErrorMultiCamNotSupported = 1009,     // 不支持双摄
-    WfmCameraErrorNoVideoOutput = 1010             // 无视频输出（画面不显示）
+    WfmCameraErrorSetupFailed = 1008               // 初始化失败
 };
 
 // 错误类型字符串
@@ -36,8 +42,6 @@ static NSString *const kErrorTypeUserCancel = @"user_cancel";
 static NSString *const kErrorTypeCaptureFailed = @"capture_failed";
 static NSString *const kErrorTypeSaveFailed = @"save_failed";
 static NSString *const kErrorTypeSetupFailed = @"setup_failed";
-static NSString *const kErrorTypeMultiCamNotSupported = @"multicam_not_supported";
-static NSString *const kErrorTypeNoVideoOutput = @"no_video_output";
 
 @interface WfmCameraPlugin () <AVCaptureVideoDataOutputSampleBufferDelegate>
 
@@ -71,11 +75,6 @@ static NSString *const kErrorTypeNoVideoOutput = @"no_video_output";
 @property (nonatomic, strong) NSString *watermarkLatitude;
 @property (nonatomic, strong) NSString *watermarkLongitude;
 @property (nonatomic, strong) NSString *watermarkOperator;
-
-// XS Max 适配：画面检测
-@property (nonatomic, strong) NSTimer *videoCheckTimer;
-@property (nonatomic, assign) BOOL hasBackFrame;
-@property (nonatomic, assign) BOOL hasFrontFrame;
 
 // 摄像头格式相关方法
 - (AVCaptureDeviceFormat *)bestFormatForDevice:(AVCaptureDevice *)device;
@@ -235,55 +234,10 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return CGSizeMake(dims.width, dims.height);
 }
 
-#pragma mark - XS Max 适配：画面检测
-- (void)startVideoCheckTimer {
-    self.hasBackFrame = NO;
-    self.hasFrontFrame = NO;
-    
-    // 3秒后检查是否有画面
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.videoCheckTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
-                                                                target:self
-                                                              selector:@selector(checkVideoFrames)
-                                                              userInfo:nil
-                                                               repeats:NO];
-    });
-}
-
-- (void)stopVideoCheckTimer {
-    if (self.videoCheckTimer) {
-        [self.videoCheckTimer invalidate];
-        self.videoCheckTimer = nil;
-    }
-}
-
-- (void)checkVideoFrames {
-    if (!self.hasBackFrame || !self.hasFrontFrame) {
-        NSMutableString *missing = [NSMutableString string];
-        if (!self.hasBackFrame) [missing appendString:@"后置"];
-        if (!self.hasFrontFrame) [missing appendString:missing.length > 0 ? @"、前置" : @"前置"];
-        
-        [self addLog:[NSString stringWithFormat:@"❌ 画面检测失败: %@ 摄像头无画面", missing]];
-        
-        // 关闭双摄并返回错误，让前端降级使用依次拍照
-        [self closeDualCameraAndCleanup];
-        [self sendErrorWithCode:WfmCameraErrorNoVideoOutput
-                            msg:[NSString stringWithFormat:@"%@摄像头无画面输出", missing]
-                      errorType:kErrorTypeNoVideoOutput
-                       callback:self.currentCallback];
-    } else {
-        [self addLog:@"✅ 画面检测通过"];
-    }
-}
-
 - (void)openDualCamera:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     [self.logs removeAllObjects];
     self.currentCallback = callback;
     self.isTakingPhoto = NO;
-    
-    // 重置画面检测标志
-    self.hasBackFrame = NO;
-    self.hasFrontFrame = NO;
     
     // 解析水印相关参数
     self.watermarkLocation = options[@"location"] ?: @"";
@@ -359,13 +313,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
-            
-            // ========== XS Max 关键修复1: 启用多任务摄像头访问 ==========
-            // 不配置这个，XS Max 等机型可能没有实际画面输出
-            if (@available(iOS 13.0, *)) {
-                self.multiCamSession.isMultitaskingCameraAccessEnabled = YES;
-                [self addLog:@"✅ 已启用 isMultitaskingCameraAccessEnabled (XS Max 适配)"];
-            }
             
             // ========== 1. 获取并配置后置摄像头 ==========
             AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
@@ -469,7 +416,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             // 后置视频输出
             self.backOutput = [[AVCaptureVideoDataOutput alloc] init];
             self.backOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
-            self.backOutput.alwaysDiscardsLateVideoFrames = NO;  // XS Max 适配：不丢弃延迟帧
             [self.backOutput setSampleBufferDelegate:self queue:self.videoQueue];
             
             if ([self.multiCamSession canAddOutput:self.backOutput]) {
@@ -492,7 +438,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             // 前置视频输出
             self.frontOutput = [[AVCaptureVideoDataOutput alloc] init];
             self.frontOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
-            self.frontOutput.alwaysDiscardsLateVideoFrames = NO;  // XS Max 适配：不丢弃延迟帧
             [self.frontOutput setSampleBufferDelegate:self queue:self.videoQueue];
             
             if ([self.multiCamSession canAddOutput:self.frontOutput]) {
@@ -609,8 +554,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
                 [self.multiCamSession startRunning];
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self addLog:@"✅ 双摄预览已开启"];
-                    // XS Max 适配：启动画面检测
-                    [self startVideoCheckTimer];
                 });
             });
             
@@ -641,7 +584,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 
 - (void)closeDualCameraAndCleanup {
     [self addLog:@"关闭双摄并释放资源"];
-    [self stopVideoCheckTimer];  // 停止画面检测
     
     if (self.multiCamSession) {
         [self.multiCamSession stopRunning];
@@ -699,18 +641,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     if (output == self.backOutput) {
         targetImageView = self.backImageView;
-        // XS Max 适配：标记已收到后置画面
-        if (!self.hasBackFrame) {
-            self.hasBackFrame = YES;
-            [self addLog:@"✅ 后置摄像头画面已显示"];
-        }
     } else if (output == self.frontOutput) {
         targetImageView = self.frontImageView;
-        // XS Max 适配：标记已收到前置画面
-        if (!self.hasFrontFrame) {
-            self.hasFrontFrame = YES;
-            [self addLog:@"✅ 前置摄像头画面已显示"];
-        }
     }
     
     if (!targetImageView) return;
@@ -1063,7 +995,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 }
 
 - (void)dealloc {
-    [self stopVideoCheckTimer];
     if (self.colorSpace) {
         CGColorSpaceRelease(self.colorSpace);
     }
