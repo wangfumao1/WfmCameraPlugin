@@ -42,7 +42,7 @@ static NSString *const kErrorTypeSetupFailed = @"setup_failed";
 @property (nonatomic, strong) UIImageView *backImageView;
 @property (nonatomic, strong) UIImageView *frontImageView;
 @property (nonatomic, strong) dispatch_queue_t videoQueue;
-@property (nonatomic, strong) CGColorSpaceRef colorSpace;
+@property (nonatomic, assign) CGColorSpaceRef colorSpace;
 @property (nonatomic, strong) NSMutableArray *logs;
 @property (nonatomic, strong) UniModuleKeepAliveCallback currentCallback;
 
@@ -63,10 +63,9 @@ static NSString *const kErrorTypeSetupFailed = @"setup_failed";
 @property (nonatomic, strong) NSString *watermarkLongitude;
 @property (nonatomic, strong) NSString *watermarkOperator;
 
-// 画面检测相关（修复 XS Max 黑屏问题）
-@property (nonatomic, assign) BOOL backCameraReceivedFrame;
-@property (nonatomic, assign) BOOL frontCameraReceivedFrame;
-@property (nonatomic, strong) dispatch_source_t frameCheckTimer;
+// 摄像头格式相关方法
+- (AVCaptureDeviceFormat *)bestFormatForDevice:(AVCaptureDevice *)device;
+- (BOOL)configureBestFormatForDevice:(AVCaptureDevice *)device;
 
 @end
 
@@ -298,22 +297,9 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 - (void)setupDualCamera API_AVAILABLE(ios(13.0)) {
     [self addLog:@"开始设置双摄..."];
     
-    // 重置画面检测标志（修复 XS Max 黑屏问题）
-    self.backCameraReceivedFrame = NO;
-    self.frontCameraReceivedFrame = NO;
-    
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
-            
-            // ========== 修复 XS Max 黑屏问题：配置会话关键属性 ==========
-            // 禁止自动配置音频会话，避免干扰视频捕获
-            self.multiCamSession.automaticallyConfiguresApplicationAudioSession = NO;
-            [self addLog:@"✅ 已禁用自动音频会话配置"];
-            
-            // 设置会话预设为高质量
-            self.multiCamSession.sessionPreset = AVCaptureSessionPresetHigh;
-            [self addLog:@"✅ 会话预设已设置为高质量"];
             
             // ========== 1. 获取并配置后置摄像头 ==========
             AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
@@ -550,13 +536,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.captureButton addTarget:self action:@selector(captureButtonTapped) forControlEvents:UIControlEventTouchUpInside];
             [topVC.view addSubview:self.captureButton];
             
-            // ========== 9. 启动会话（修复 XS Max 黑屏：添加画面检测） ==========
+            // ========== 9. 启动会话 ==========
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
                 [self.multiCamSession startRunning];
-                
-                // 启动画面检测计时器（修复 XS Max 黑屏问题）
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [self startFrameCheckTimer];
+                    [self addLog:@"✅ 双摄预览已开启"];
                 });
             });
             
@@ -644,12 +628,8 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     if (output == self.backOutput) {
         targetImageView = self.backImageView;
-        // 标记后置摄像头收到画面（修复 XS Max 黑屏检测）
-        self.backCameraReceivedFrame = YES;
     } else if (output == self.frontOutput) {
         targetImageView = self.frontImageView;
-        // 标记前置摄像头收到画面（修复 XS Max 黑屏检测）
-        self.frontCameraReceivedFrame = YES;
     }
     
     if (!targetImageView) return;
@@ -935,7 +915,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         
         CGFloat textX = bgX + padding;
         CGFloat textY = currentY + (textHeight - textHeight) / 2;
-        
         [text drawAtPoint:CGPointMake(textX, textY) withAttributes:attrs];
         
         currentY += textHeight + spacing;
@@ -1002,60 +981,9 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return YES;
 }
 
-// 启动画面检测计时器（修复 XS Max 黑屏问题）
-- (void)startFrameCheckTimer API_AVAILABLE(ios(13.0)) {
-    if (self.frameCheckTimer) {
-        dispatch_source_cancel(self.frameCheckTimer);
-        self.frameCheckTimer = nil;
-    }
-    
-    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
-    self.frameCheckTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-    
-    dispatch_source_set_timer(self.frameCheckTimer,
-                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
-                              DISPATCH_TIME_FOREVER,
-                              0);
-    
-    dispatch_source_set_event_handler(self.frameCheckTimer, ^{
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self checkCameraFrames];
-        });
-    });
-    
-    dispatch_resume(self.frameCheckTimer);
-}
-
-// 检查摄像头画面是否正常（修复 XS Max 黑屏问题）
-- (void)checkCameraFrames API_AVAILABLE(ios(13.0)) {
-    if (self.frameCheckTimer) {
-        dispatch_source_cancel(self.frameCheckTimer);
-        self.frameCheckTimer = nil;
-    }
-    
-    if (!self.backCameraReceivedFrame || !self.frontCameraReceivedFrame) {
-        [self addLog:[NSString stringWithFormat:@"❌ 画面检测失败 - 后置收到:%d, 前置收到:%d", 
-                     self.backCameraReceivedFrame, self.frontCameraReceivedFrame]];
-        [self closeDualCameraAndCleanup];
-        [self sendErrorWithCode:WfmCameraErrorSetupFailed 
-                            msg:@"摄像头无法获取画面，请重试" 
-                      errorType:kErrorTypeSetupFailed 
-                       callback:self.currentCallback];
-    } else {
-        [self addLog:@"✅ 双摄预览已开启，画面正常"];
-        [self addLog:[NSString stringWithFormat:@"会话状态: running=%d, interrupted=%d", 
-                     self.multiCamSession.isRunning, 
-                     self.multiCamSession.isInterrupted]];
-    }
-}
-
 - (void)dealloc {
     if (self.colorSpace) {
         CGColorSpaceRelease(self.colorSpace);
-    }
-    if (self.frameCheckTimer) {
-        dispatch_source_cancel(self.frameCheckTimer);
-        self.frameCheckTimer = nil;
     }
 }
 
