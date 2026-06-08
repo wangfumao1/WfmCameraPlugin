@@ -300,6 +300,9 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
+
+            self.multiCamSession.isMultitaskingCameraAccessEnabled = YES;
+            [self addLog:@"✅ 已启用多任务相机访问"];
             
             // ========== 修复 XS Max 黑屏问题 ==========
             // 禁止自动配置音频会话（XS Max 对资源管理敏感）
@@ -411,6 +414,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             // ========== 4. 添加视频输出并设置方向 ==========
             // 后置视频输出
             self.backOutput = [[AVCaptureVideoDataOutput alloc] init];
+            self.backOutput.alwaysDiscardsLateVideoFrames = NO;
             self.backOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
             [self.backOutput setSampleBufferDelegate:self queue:self.videoQueue];
             
@@ -433,6 +437,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             
             // 前置视频输出
             self.frontOutput = [[AVCaptureVideoDataOutput alloc] init];
+            self.frontOutput.alwaysDiscardsLateVideoFrames = NO;
             self.frontOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
             [self.frontOutput setSampleBufferDelegate:self queue:self.videoQueue];
             
