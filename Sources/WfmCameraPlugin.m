@@ -316,10 +316,6 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             self.multiCamSession.automaticallyConfiguresApplicationAudioSession = NO;
             [self addLog:@"✅ 已禁用自动音频会话配置"];
             
-            // 设置高质量预设
-            self.multiCamSession.sessionPreset = AVCaptureSessionPresetHigh;
-            [self addLog:@"✅ 会话预设已设置为高质量"];
-            
             // ========== 1. 获取并配置后置摄像头 ==========
             AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
                                                                               mediaType:AVMediaTypeVideo
