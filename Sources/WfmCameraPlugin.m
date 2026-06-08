@@ -42,7 +42,7 @@ static NSString *const kErrorTypeSetupFailed = @"setup_failed";
 @property (nonatomic, strong) UIImageView *backImageView;
 @property (nonatomic, strong) UIImageView *frontImageView;
 @property (nonatomic, strong) dispatch_queue_t videoQueue;
-@property (nonatomic, assign) CGColorSpaceRef colorSpace;
+@property (nonatomic, strong) CGColorSpaceRef colorSpace;
 @property (nonatomic, strong) NSMutableArray *logs;
 @property (nonatomic, strong) UniModuleKeepAliveCallback currentCallback;
 
@@ -63,15 +63,10 @@ static NSString *const kErrorTypeSetupFailed = @"setup_failed";
 @property (nonatomic, strong) NSString *watermarkLongitude;
 @property (nonatomic, strong) NSString *watermarkOperator;
 
-// 摄像头格式相关方法
-- (AVCaptureDeviceFormat *)bestFormatForDevice:(AVCaptureDevice *)device;
-- (BOOL)configureBestFormatForDevice:(AVCaptureDevice *)device;
-
-// 连接配置方法
-- (BOOL)setupConnections API_AVAILABLE(ios(13.0));
-
-// 双摄支持检测方法
-- (BOOL)isDeviceSupportDualCamera API_AVAILABLE(ios(13.0));
+// 画面检测相关（修复 XS Max 黑屏问题）
+@property (nonatomic, assign) BOOL backCameraReceivedFrame;
+@property (nonatomic, assign) BOOL frontCameraReceivedFrame;
+@property (nonatomic, strong) dispatch_source_t frameCheckTimer;
 
 @end
 
@@ -303,23 +298,15 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
 - (void)setupDualCamera API_AVAILABLE(ios(13.0)) {
     [self addLog:@"开始设置双摄..."];
     
+    // 重置画面检测标志（修复 XS Max 黑屏问题）
+    self.backCameraReceivedFrame = NO;
+    self.frontCameraReceivedFrame = NO;
+    
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // ========== 1. 检查设备是否支持双摄 ==========
-            if (![self isDeviceSupportDualCamera]) {
-                [self addLog:@"❌ 设备不支持双摄"];
-                [self sendErrorWithCode:WfmCameraErrorCameraUnavailable 
-                                    msg:@"设备不支持双摄功能" 
-                              errorType:kErrorTypeCameraUnavailable 
-                               callback:self.currentCallback];
-                return;
-            }
-            [self addLog:@"✅ 设备支持双摄"];
-            
-            // 创建 MultiCamSession
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
             
-            // ========== 2. 配置会话关键属性 ==========
+            // ========== 修复 XS Max 黑屏问题：配置会话关键属性 ==========
             // 禁止自动配置音频会话，避免干扰视频捕获
             self.multiCamSession.automaticallyConfiguresApplicationAudioSession = NO;
             [self addLog:@"✅ 已禁用自动音频会话配置"];
@@ -426,24 +413,53 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.multiCamSession addInput:self.frontInput];
             [self addLog:@"✅ 前置输入添加成功"];
             
-            // ========== 4. 添加视频输出并设置连接 ==========
+            // ========== 4. 添加视频输出并设置方向 ==========
             // 后置视频输出
             self.backOutput = [[AVCaptureVideoDataOutput alloc] init];
             self.backOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
             [self.backOutput setSampleBufferDelegate:self queue:self.videoQueue];
+            
+            if ([self.multiCamSession canAddOutput:self.backOutput]) {
+                [self.multiCamSession addOutputWithNoConnections:self.backOutput];
+                if (self.backInput.ports.count > 0) {
+                    AVCaptureConnection *backConnection = [AVCaptureConnection connectionWithInputPorts:self.backInput.ports output:self.backOutput];
+                    if (backConnection) {
+                        if ([backConnection isVideoOrientationSupported]) {
+                            backConnection.videoOrientation = AVCaptureVideoOrientationPortrait;
+                            [self addLog:@"✅ 后置视频方向设置为竖屏"];
+                        }
+                        if ([self.multiCamSession canAddConnection:backConnection]) {
+                            [self.multiCamSession addConnection:backConnection];
+                            [self addLog:@"✅ 后置视频输出添加成功"];
+                        }
+                    }
+                }
+            }
             
             // 前置视频输出
             self.frontOutput = [[AVCaptureVideoDataOutput alloc] init];
             self.frontOutput.videoSettings = @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
             [self.frontOutput setSampleBufferDelegate:self queue:self.videoQueue];
             
-            // 使用专用方法设置连接
-            if (![self setupConnections]) {
-                [self sendErrorWithCode:WfmCameraErrorSetupFailed 
-                                    msg:@"连接配置失败" 
-                              errorType:kErrorTypeSetupFailed 
-                               callback:self.currentCallback];
-                return;
+            if ([self.multiCamSession canAddOutput:self.frontOutput]) {
+                [self.multiCamSession addOutputWithNoConnections:self.frontOutput];
+                if (self.frontInput.ports.count > 0) {
+                    AVCaptureConnection *frontConnection = [AVCaptureConnection connectionWithInputPorts:self.frontInput.ports output:self.frontOutput];
+                    if (frontConnection) {
+                        if ([frontConnection isVideoOrientationSupported]) {
+                            frontConnection.videoOrientation = AVCaptureVideoOrientationPortrait;
+                            [self addLog:@"✅ 前置视频方向设置为竖屏"];
+                        }
+                        if (frontConnection.isVideoMirroringSupported) {
+                            frontConnection.videoMirrored = YES;
+                            [self addLog:@"✅ 前置摄像头镜像已开启"];
+                        }
+                        if ([self.multiCamSession canAddConnection:frontConnection]) {
+                            [self.multiCamSession addConnection:frontConnection];
+                            [self addLog:@"✅ 前置视频输出添加成功"];
+                        }
+                    }
+                }
             }
             
             // ========== 5. 获取当前视图 ==========
@@ -534,24 +550,13 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
             [self.captureButton addTarget:self action:@selector(captureButtonTapped) forControlEvents:UIControlEventTouchUpInside];
             [topVC.view addSubview:self.captureButton];
             
-            // ========== 9. 启动会话 ==========
+            // ========== 9. 启动会话（修复 XS Max 黑屏：添加画面检测） ==========
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
                 [self.multiCamSession startRunning];
                 
-                // 等待会话启动并检查状态
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    if (self.multiCamSession.isRunning) {
-                        [self addLog:@"✅ 双摄预览已开启"];
-                        [self addLog:[NSString stringWithFormat:@"会话状态: running=%d, interrupted=%d", 
-                                     self.multiCamSession.isRunning, 
-                                     self.multiCamSession.isInterrupted]];
-                    } else {
-                        [self addLog:@"❌ 会话启动失败"];
-                        [self sendErrorWithCode:WfmCameraErrorSetupFailed 
-                                            msg:@"摄像头会话启动失败" 
-                                      errorType:kErrorTypeSetupFailed 
-                                       callback:self.currentCallback];
-                    }
+                // 启动画面检测计时器（修复 XS Max 黑屏问题）
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self startFrameCheckTimer];
                 });
             });
             
@@ -639,8 +644,12 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     
     if (output == self.backOutput) {
         targetImageView = self.backImageView;
+        // 标记后置摄像头收到画面（修复 XS Max 黑屏检测）
+        self.backCameraReceivedFrame = YES;
     } else if (output == self.frontOutput) {
         targetImageView = self.frontImageView;
+        // 标记前置摄像头收到画面（修复 XS Max 黑屏检测）
+        self.frontCameraReceivedFrame = YES;
     }
     
     if (!targetImageView) return;
@@ -926,6 +935,7 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         
         CGFloat textX = bgX + padding;
         CGFloat textY = currentY + (textHeight - textHeight) / 2;
+        
         [text drawAtPoint:CGPointMake(textX, textY) withAttributes:attrs];
         
         currentY += textHeight + spacing;
@@ -992,119 +1002,60 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
     return YES;
 }
 
-#pragma mark - 连接配置
-
-- (BOOL)setupConnections API_AVAILABLE(ios(13.0)) {
-    [self addLog:@"开始配置摄像头连接..."];
-    
-    // 配置后置连接
-    if (![self setupConnectionForInput:self.backInput output:self.backOutput isFront:NO]) {
-        [self addLog:@"❌ 后置连接配置失败"];
-        return NO;
+// 启动画面检测计时器（修复 XS Max 黑屏问题）
+- (void)startFrameCheckTimer API_AVAILABLE(ios(13.0)) {
+    if (self.frameCheckTimer) {
+        dispatch_source_cancel(self.frameCheckTimer);
+        self.frameCheckTimer = nil;
     }
     
-    // 配置前置连接
-    if (![self setupConnectionForInput:self.frontInput output:self.frontOutput isFront:YES]) {
-        [self addLog:@"❌ 前置连接配置失败"];
-        return NO;
-    }
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+    self.frameCheckTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
     
-    [self addLog:@"✅ 所有连接配置完成"];
-    return YES;
+    dispatch_source_set_timer(self.frameCheckTimer,
+                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                              DISPATCH_TIME_FOREVER,
+                              0);
+    
+    dispatch_source_set_event_handler(self.frameCheckTimer, ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self checkCameraFrames];
+        });
+    });
+    
+    dispatch_resume(self.frameCheckTimer);
 }
 
-- (BOOL)setupConnectionForInput:(AVCaptureDeviceInput *)input output:(AVCaptureVideoDataOutput *)output isFront:(BOOL)isFront {
-    if (!input || !output) {
-        return NO;
+// 检查摄像头画面是否正常（修复 XS Max 黑屏问题）
+- (void)checkCameraFrames API_AVAILABLE(ios(13.0)) {
+    if (self.frameCheckTimer) {
+        dispatch_source_cancel(self.frameCheckTimer);
+        self.frameCheckTimer = nil;
     }
     
-    // 添加输出（不带连接）
-    if (![self.multiCamSession canAddOutput:output]) {
-        [self addLog:[NSString stringWithFormat:@"❌ 无法添加%@输出", isFront ? @"前置" : @"后置"]];
-        return NO;
-    }
-    [self.multiCamSession addOutputWithNoConnections:output];
-    
-    // 确保有可用的端口
-    if (input.ports.count == 0) {
-        [self addLog:[NSString stringWithFormat:@"❌ %@输入没有可用端口", isFront ? @"前置" : @"后置"]];
-        return NO;
-    }
-    
-    // 创建连接
-    AVCaptureConnection *connection = [AVCaptureConnection connectionWithInputPorts:input.ports output:output];
-    if (!connection) {
-        [self addLog:[NSString stringWithFormat:@"❌ 无法创建%@连接", isFront ? @"前置" : @"后置"]];
-        return NO;
-    }
-    
-    // 设置视频方向（兼容 iOS 17+ 新 API）
-    if (@available(iOS 17.0, *)) {
-        // iOS 17+ 使用新的 API
-        if ([connection isVideoRotationAngleSupported:90]) {
-            [connection setVideoRotationAngle:90];
-            [self addLog:[NSString stringWithFormat:@"✅ %@视频旋转角度设置为90度", isFront ? @"前置" : @"后置"]];
-        }
+    if (!self.backCameraReceivedFrame || !self.frontCameraReceivedFrame) {
+        [self addLog:[NSString stringWithFormat:@"❌ 画面检测失败 - 后置收到:%d, 前置收到:%d", 
+                     self.backCameraReceivedFrame, self.frontCameraReceivedFrame]];
+        [self closeDualCameraAndCleanup];
+        [self sendErrorWithCode:WfmCameraErrorSetupFailed 
+                            msg:@"摄像头无法获取画面，请重试" 
+                      errorType:kErrorTypeSetupFailed 
+                       callback:self.currentCallback];
     } else {
-        // iOS 17 以下使用旧的 API
-        #pragma clang diagnostic push
-        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        if ([connection isVideoOrientationSupported]) {
-            connection.videoOrientation = AVCaptureVideoOrientationPortrait;
-            [self addLog:[NSString stringWithFormat:@"✅ %@视频方向设置为竖屏", isFront ? @"前置" : @"后置"]];
-        }
-        #pragma clang diagnostic pop
+        [self addLog:@"✅ 双摄预览已开启，画面正常"];
+        [self addLog:[NSString stringWithFormat:@"会话状态: running=%d, interrupted=%d", 
+                     self.multiCamSession.isRunning, 
+                     self.multiCamSession.isInterrupted]];
     }
-    
-    // 前置摄像头需要镜像
-    if (isFront && connection.isVideoMirroringSupported) {
-        connection.videoMirrored = YES;
-        [self addLog:@"✅ 前置摄像头镜像已开启"];
-    }
-    
-    // 添加连接到会话
-    if (![self.multiCamSession canAddConnection:connection]) {
-        [self addLog:[NSString stringWithFormat:@"❌ 无法添加%@连接到会话", isFront ? @"前置" : @"后置"]];
-        return NO;
-    }
-    [self.multiCamSession addConnection:connection];
-    [self addLog:[NSString stringWithFormat:@"✅ %@视频输出添加成功", isFront ? @"前置" : @"后置"]];
-    
-    return YES;
-}
-
-#pragma mark - 双摄支持检测
-
-- (BOOL)isDeviceSupportDualCamera API_AVAILABLE(ios(13.0)) {
-    // 方法1: 检查系统类属性（iOS 13+）
-    if ([AVCaptureMultiCamSession respondsToSelector:@selector(multiCamSupported)]) {
-        if (AVCaptureMultiCamSession.multiCamSupported) {
-            [self addLog:@"✅ 系统检测: 设备支持双摄"];
-            return YES;
-        }
-        [self addLog:@"⚠️ 系统检测: 设备不支持双摄，尝试手动检测..."];
-    }
-    
-    // 方法2: 手动检测前后置摄像头是否都存在
-    AVCaptureDevice *backCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
-                                                                      mediaType:AVMediaTypeVideo
-                                                                       position:AVCaptureDevicePositionBack];
-    AVCaptureDevice *frontCamera = [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
-                                                                       mediaType:AVMediaTypeVideo
-                                                                        position:AVCaptureDevicePositionFront];
-    
-    if (backCamera && frontCamera) {
-        [self addLog:@"✅ 手动检测: 前后置摄像头都存在"];
-        return YES;
-    }
-    
-    [self addLog:@"❌ 手动检测: 缺少前置或后置摄像头"];
-    return NO;
 }
 
 - (void)dealloc {
     if (self.colorSpace) {
         CGColorSpaceRelease(self.colorSpace);
+    }
+    if (self.frameCheckTimer) {
+        dispatch_source_cancel(self.frameCheckTimer);
+        self.frameCheckTimer = nil;
     }
 }
 
