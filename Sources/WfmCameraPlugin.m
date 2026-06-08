@@ -301,7 +301,14 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         @try {
             self.multiCamSession = [[AVCaptureMultiCamSession alloc] init];
 
-            self.multiCamSession.isMultitaskingCameraAccessEnabled = YES;
+            if (@available(iOS 13.0, *)) {
+                @try {
+                    [self.multiCamSession setValue:@YES forKey:@"isMultitaskingCameraAccessEnabled"];
+                    [self addLog:@"✅ 已启用 isMultitaskingCameraAccessEnabled"];
+                } @catch (NSException *exception) {
+                    [self addLog:@"⚠️ 不支持 isMultitaskingCameraAccessEnabled"];
+                }
+            }
             [self addLog:@"✅ 已启用多任务相机访问"];
             
             // ========== 修复 XS Max 黑屏问题 ==========
