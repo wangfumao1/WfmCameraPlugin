@@ -956,6 +956,11 @@ UNI_EXPORT_METHOD(@selector(log:callback:))
         int area = dims.width * dims.height;
         float aspectRatio = (float)dims.width / (float)dims.height;
         BOOL isWideScreen = fabs(aspectRatio - 16.0/9.0) < 0.1;
+
+        
+        if (dims.width > 1920 || dims.height > 1080) {
+            continue;
+        }
         
         if (area > maxArea) {
             if (isWideScreen) {
